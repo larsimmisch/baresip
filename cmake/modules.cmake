@@ -72,6 +72,7 @@ set(MODULES
   vidbridge
   vidinfo
   vumeter
+  vqueue
 )
 
 if(AAC_FOUND)
