@@ -36,21 +36,6 @@
  \endverbatim
  */
 
-
-struct auplay_st {
-	char *device;
-	struct auplay_prm prm;
-	auplay_write_h *wh;
-	void *arg;
-};
-
-struct ausrc_st {
-	char *device;
-	struct ausrc_prm prm;
-	ausrc_read_h *rh;
-	void *arg;
-};
-
 const int max_priority = 5;
 
 enum mode {
@@ -69,7 +54,7 @@ struct Play {
 	size_t position;
 };
 
-struct Record {
+struct Source {
 	std::string filename;
 	int max_silence;
 };
@@ -79,7 +64,7 @@ struct DTMF {
 	int inter_digit_delay;
 };
 
-using Atom = std::variant<Play, Record, DTMF>;
+using Atom = std::variant<Play, Source, DTMF>;
 
 struct Molecule {
 	std::vector<Atom> atoms;
@@ -100,13 +85,139 @@ struct vqueue {
 	int current_id;
 };
 
-static struct vqueue *vqueue;
+struct auplay_st {
+	struct aufile *auf;
+	struct auplay_prm prm;
+	thrd_t thread;
+	RE_ATOMIC bool run;
+	void *sampv;
+	size_t sampc;
+	size_t num_bytes;
+	auplay_write_h *wh;
+	Play *play;
+};
+
+struct ausrc_st {
+	struct tmr tmr;
+	struct aufile *aufile;
+	struct aubuf *aubuf;
+	enum aufmt fmt;                 /**< Wav file sample format          */
+	struct ausrc_prm prm;           /**< Audio src parameter             */
+	uint32_t ptime;
+	size_t sampc;
+	RE_ATOMIC bool run;
+	RE_ATOMIC bool started;
+	thrd_t thread;
+	ausrc_read_h *rh;
+	ausrc_error_h *errh;
+	Source* src;
+};
+
+static vqueue vqueue;
 static struct ausrc *ausrc;
 static struct auplay *auplay;
 
+
+static int vqueue_thread(void *arg) {
+	struct auplay_st *st = (struct auplay_st*)arg;
+	uint64_t t;
+	int dt;
+	int err;
+	uint32_t ptime = st->prm.ptime;
+
+	t = tmr_jiffies();
+	while (re_atomic_rlx(&st->run)) {
+		struct auframe af;
+
+		auframe_init(&af, (enum aufmt)st->prm.fmt, st->sampv, st->sampc,
+			     st->prm.srate, st->prm.ch);
+
+		af.timestamp = t * 1000;
+
+		st->wh(&af, (void*)st->play->filename.c_str());
+
+		err = aufile_write(st->auf, (const uint8_t*)st->sampv, st->num_bytes);
+		if (err)
+			break;
+
+		t += ptime;
+		dt = (int)(t - tmr_jiffies());
+		if (dt <= 2)
+			continue;
+
+		sys_msleep(dt);
+	}
+
+	re_atomic_rlx_set(&st->run, false);
+
+	return 0;
+}
+
+static int src_thread(void *arg) {
+	uint64_t now, ts = tmr_jiffies();
+	struct ausrc_st *st = (struct ausrc_st*)arg;
+	int16_t *sampv;
+	uint32_t ms = 4;
+
+	re_atomic_rlx_set(&st->started, true);
+	if (!st->ptime)
+		ms = 0;
+
+	sampv = (int16_t*)mem_alloc(st->sampc * sizeof(int16_t), NULL);
+	if (!sampv)
+		return ENOMEM;
+
+	while (re_atomic_rlx(&st->run)) {
+		struct auframe af;
+
+		sys_msleep(ms);
+		now = tmr_jiffies();
+		if (ts > now)
+			continue;
+
+		auframe_init(&af, AUFMT_S16LE, sampv, st->sampc,
+		             st->prm.srate, st->prm.ch);
+
+		aubuf_read_auframe(st->aubuf, &af);
+
+		st->rh(&af, (void*)st->src->filename.c_str());
+
+		ts += st->ptime;
+
+		if (aubuf_cur_size(st->aubuf) == 0)
+			break;
+	}
+
+	mem_deref(sampv);
+	re_atomic_rlx_set(&st->run, false);
+
+	return 0;
+}
+
+
 extern "C" {
 
-	static void vqueue_destructor(void *arg) {
+	static void vqueue_play_destructor(void *arg) {
+		struct auplay_st *st = (struct auplay_st*)arg;
+		/* Wait for termination of other thread */
+		if (re_atomic_rlx(&st->run)) {
+			debug("vqueue: stopping thread\n");
+			re_atomic_rlx_set(&st->run, false);
+			thrd_join(st->thread, NULL);
+		}
+
+		mem_deref(st->auf);
+		mem_deref(st->sampv);
+	}
+
+	static void vqueue_src_destructor(void *arg) {
+		struct ausrc_st *st = (struct ausrc_st*)arg;
+		/* Wait for termination of other thread */
+		if (re_atomic_rlx(&st->run)) {
+			debug("vqueue: stopping recording thread\n");
+			re_atomic_rlx_set(&st->run, false);
+			thrd_join(st->thread, NULL);
+		}
 	}
 
 	static int vqueue_player_alloc(struct auplay_st **stp,
@@ -119,30 +230,29 @@ extern "C" {
 		if (!stp || !ap || !prm || !wh)
 			return EINVAL;
 
-		info ("vqueue: opening player (%u Hz, %d channels, device %s, "
-			"ptime %u)\n", prm->srate, prm->ch, dev, prm->ptime);
-
-		st = (struct auplay_st*)mem_zalloc(sizeof(*st), vqueue_destructor);
+		st = (struct auplay_st*)mem_zalloc(sizeof(*st), vqueue_play_destructor);
 		if (!st)
 			return ENOMEM;
-
-		err = str_dup(&st->device, dev);
-		if (err)
-			goto out;
 
 		st->prm.srate = prm->srate;
 		st->prm.ch	= prm->ch;
 		st->prm.ptime = prm->ptime;
 		st->prm.fmt   = prm->fmt;
 
-		st->wh  = wh;
-		st->arg = arg;
+		st->wh = wh;
 
-	out:
 		if (err)
 			mem_deref(st);
 		else
 			*stp = st;
+
+		info ("vqueue: opening player (%s, %u Hz, %d channels, device %s, "
+			"ptime %u)\n", st->play->filename.c_str(), prm->srate, prm->ch, dev, prm->ptime);
+		re_atomic_rlx_set(&st->run, true);
+		err = thread_create_name(&st->thread, "vqueue_play", vqueue_thread, st);
+		if (err) {
+			re_atomic_rlx_set(&st->run, false);
+		}
 
 		return err;
 	}
@@ -157,16 +267,9 @@ extern "C" {
 		if (!stp || !ap || !prm || !rh)
 			return EINVAL;
 
-		info ("vqueue: opening source (%u Hz, %d channels, device %s, "
-			"ptime %u)\n", prm->srate, prm->ch, dev, prm->ptime);
-
-		st = (struct ausrc_st*)mem_zalloc(sizeof(*st), vqueue_destructor);
+		st = (struct ausrc_st*)mem_zalloc(sizeof(*st), vqueue_src_destructor);
 		if (!st)
 			return ENOMEM;
-
-		err = str_dup(&st->device, dev);
-		if (err)
-			goto out;
 
 		st->prm.srate = prm->srate;
 		st->prm.ch	= prm->ch;
@@ -174,9 +277,11 @@ extern "C" {
 		st->prm.fmt   = prm->fmt;
 
 		st->rh  = rh;
-		st->arg = arg;
+		st->src = (Source*)arg;
 
-	out:
+		info ("vqueue: opening source (%s, %u Hz, %d channels, device %s, "
+			"ptime %u)\n", st->src->filename.c_str(), prm->srate, prm->ch, dev, prm->ptime);
+
 		if (err)
 			mem_deref(st);
 		else
@@ -222,7 +327,7 @@ bool is_atom_start(const std::string &token) {
 	return false;
 }
 
-size_t vqueue_enqueue(const char* args)
+int vqueue_enqueue(const char* args)
 {
 	std::string sargs(args);
 	std::regex ws("\\s+");
@@ -311,18 +416,18 @@ size_t vqueue_enqueue(const char* args)
 		else if (*token == "r") {
 			auto args = token;
 			if (args != tokens.end()) {
-				Record record;
-				record.filename = *args;
+				Source src;
+				src.filename = *args;
 
 				++args;
 				if (args != tokens.end()) {
 
 					if (!is_atom_start(*args)) {
-						record.max_silence = std::stol(*args);
+						src.max_silence = std::stol(*args);
 					}
 				}
 
-				m.atoms.push_back(record);
+				m.atoms.push_back(src);
 			}
 			else {
 				perror("No filename after record atom");
@@ -358,18 +463,12 @@ size_t vqueue_enqueue(const char* args)
 		return 0;
 	}
 
-	assert(vqueue);
-
-	return vqueue->current_id++;
+	return vqueue.current_id++;
 }
 
-void vqueue_stop(const char* args)
-{
-
+void vqueue_stop(const char* args) {
 }
 
-void vqueue_cancel(const char* args)
-{
-
+void vqueue_cancel(const char* args) {
 }
 

@@ -10,7 +10,7 @@
 
 extern "C" {
 	// returns an ID that can be used to stop the molecule
-	size_t vqueue_enqueue(const char* args);
+	int vqueue_enqueue(const char* args);
 	void vqueue_stop(const char* args);
 	void vqueue_cancel(const char* args);
 };
