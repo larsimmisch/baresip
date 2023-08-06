@@ -1,5 +1,6 @@
 /**
- * @file vqueue.h Audio module that implements a priority queue with loops and interuption modes
+ * @file vqueue.h Audio module that implements a priority queue with loops
+ * and interuption modes
  *
  * Copyright (C) 2023 Lars Immisch
  */

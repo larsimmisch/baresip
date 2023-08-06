@@ -26,10 +26,11 @@
  * Sample config:
  *
  \verbatim
-  vqueue_enqueue	<molecule>	 discard|pause|mute|restart|dont_interrupt|
-									 loop|m_dtmf_stop
+  vqueue_enqueue	<molecule>	discard|pause|mute|restart|
+  								dont_interrupt|
+								loop|m_dtmf_stop
   molecule:			(p file)|(r file <maxsilence>?)|
-					   (d <digits> <inter_digit_delay>?)
+						(d <digits> <inter_digit_delay>?)
   vqueue_stop		<id>
   vqueue_cancel		<priority>
  \endverbatim
@@ -286,13 +287,13 @@ size_t vqueue_enqueue(const char* args)
 
 		if (*token == "p") {
 			auto args = token;
-			args++;
+			++args;
 
 			if (args != tokens.end()) {
 				Play play;
 				play.filename = *args;
 
-				args++;
+				++args;
 				if (args != tokens.end()) {
 
 					if (!is_atom_start(*args)) {
@@ -313,7 +314,7 @@ size_t vqueue_enqueue(const char* args)
 				Record record;
 				record.filename = *args;
 
-				args++;
+				++args;
 				if (args != tokens.end()) {
 
 					if (!is_atom_start(*args)) {
@@ -334,7 +335,7 @@ size_t vqueue_enqueue(const char* args)
 				DTMF dtmf;
 				dtmf.dtmf = *args;
 
-				args++;
+				++args;
 				if (args != tokens.end()) {
 
 					if (!is_atom_start(*args)) {
