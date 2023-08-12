@@ -105,8 +105,9 @@ struct vq_st {
 	void *arg;
 };
 
-static struct ausrc *ausrc;
-static struct auplay *auplay;
+struct ausrc *ausrc;
+struct auplay *auplay;
+static std::vector<vq_st> channels;
 
 /**
 * Process a single atom
@@ -204,6 +205,33 @@ static int vqueue_thread(void *arg) {
 	return 0;
 }
 
+bool is_atom_start(const std::string &token) {
+	if (token == "p" || token == "r" || token == "d") {
+		return true;
+	}
+
+	return false;
+}
+
+const char* mode_string(mode m) {
+	switch (m) {
+		case m_discard:
+			return "discard";
+		case m_pause:
+			return "pause";
+		case m_mute:
+			return "mute";
+		case m_restart:
+			return "restart";
+		case m_dont_interrupt:
+			return "dont_interrupt";
+		case m_loop:
+			return "loop";
+		case m_dtmf_stop:
+			return "dtmf_stop";
+	}
+}
+
 extern "C" {
 
 	static void timeout(void *arg)
@@ -296,7 +324,7 @@ extern "C" {
 		return err;
 	}
 
-	static void vqueue_destructor(void *arg) {
+	void vqueue_destructor(void *arg) {
 		vq_st* vq = (vq_st*)arg;
 
 		/* Wait for termination of other thread */
@@ -310,18 +338,60 @@ extern "C" {
 		mem_deref(vq->sampv);
 	}
 
-	static int vqueue_player_alloc(struct auplay_st **stp,
+	int vqueue_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
+		     struct ausrc_prm *prm, const char *dev,
+		     ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
+	{
+		int err = 0;
+
+		if (!stp || !as || !prm || !rh) {
+			return EINVAL;
+		}
+
+		vq_st* vq = NULL;
+
+		for (auto ch: channels) {
+			if (ch.arg == arg) {
+				info("vqueue: found existing channel");
+				vq = &ch;
+				break;
+			}
+		}
+		vq->play_prm.srate = prm->srate;
+		vq->play_prm.ch	= prm->ch;
+		vq->play_prm.ptime = prm->ptime;
+		vq->play_prm.fmt   = prm->fmt;
+
+		vq->rh = rh;
+
+		if (!err) {
+			*stp = (struct ausrc_st*)vq;
+		}
+
+		info ("vqueue: opening player (%u Hz, %d channels, device %s, "
+			"ptime %u, arg %p)\n", prm->srate, prm->ch, dev, prm->ptime, arg);
+
+	}
+
+	int vqueue_play_alloc(struct auplay_st **stp,
 		const struct auplay *ap, struct auplay_prm *prm,
 		const char *dev, auplay_write_h *wh, void *arg)
 	{
 		int err = 0;
 
-		if (!stp || !ap || !prm || !wh)
+		if (!stp || !ap || !prm || !wh) {
 			return EINVAL;
+		}
 
-		vq_st *vq = (vq_st*)mem_zalloc(sizeof(*vq), vqueue_destructor);
-		if (!vq)
-			return ENOMEM;
+		vq_st* vq = NULL;
+
+		for (auto ch: channels) {
+			if (ch.arg == arg) {
+				info("vqueue: found existing channel");
+				vq = &ch;
+				break;
+			}
+		}
 
 		vq->play_prm.srate = prm->srate;
 		vq->play_prm.ch	= prm->ch;
@@ -330,321 +400,172 @@ extern "C" {
 
 		vq->wh = wh;
 
-		if (err) {
-			mem_deref(vq);
-		}
-		else {
+		if (!err) {
 			*stp = (struct auplay_st*)vq;
 		}
 
-		info ("vqueue: opening queue (%u Hz, %d channels, device %s, "
-			"ptime %u)\n", prm->srate, prm->ch, dev, prm->ptime);
-		re_atomic_rlx_set(&vq->run, true);
-		err = thread_create_name(&vq->thread, "vqueue_thread", vqueue_thread, vq);
-		if (err) {
-			re_atomic_rlx_set(&vq->run, false);
-		}
+		info ("vqueue: opening player (%u Hz, %d channels, device %s, "
+			"ptime %u, arg %p)\n", prm->srate, prm->ch, dev, prm->ptime, arg);
 
 		return err;
 	}
 
-	int vqueue_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
-				struct ausrc_prm *prm, const char *dev,
-				ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
+	int vqueue_enqueue(const char* args)
 	{
-		struct aufile_prm fprm;
-		uint32_t   ptime;
-		bool join = false;
-		int err;
+		std::string sargs(args);
+		std::regex ws("\\s+");
 
-		if (!stp || !as || !prm || !rh)
-			return EINVAL;
+		std::sregex_token_iterator iter(sargs.begin(), sargs.end(), ws, -1);
+		std::sregex_token_iterator end;
 
-		if (prm->fmt != AUFMT_S16LE) {
-			warning("aufile: unsupported sample format (%s)\n",
-				aufmt_name((enum aufmt)prm->fmt));
-			return ENOTSUP;
+		std::vector<std::string> vec(iter, end);
+		std::vector<std::string> tokens;
+
+		for (auto a: vec)
+		{
+			std::smatch m;
+			if (!std::regex_match(a, m, ws)) {
+				tokens.push_back(a);
+			}
 		}
 
-		info("vqueue: loading input file '%s'\n", dev);
+		Molecule m;
 
-		vq_st* vq = (vq_st*)mem_zalloc(sizeof(*vq), vqueue_destructor);
-		if (!vq)
-			return ENOMEM;
-
-		vq->rh    = rh;
-		vq->errh  = errh;
-		vq->arg   = arg;
-		vq->ptime = prm->ptime;
-
-		/* ptime == 0 means blocking mode */
-		join = vq->ptime == 0;
-		ptime = vq->ptime;
-		if (!ptime)
-			ptime = 40;
-
-		err = aufile_open(&vq->auf, &fprm, dev, AUFILE_READ);
-		if (err) {
-			warning("vqueue: failed to open file '%s' (%m)\n", dev, err);
-			goto out;
+		auto token = tokens.begin();
+		if (token == tokens.end()) {
+			perror("missing mode");
+			return 0;
 		}
 
-		info("vqueue: %s: %u Hz, %d channels, %s\n",
-			dev, fprm.srate, fprm.channels, aufmt_name(fprm.fmt));
+		if (*token == "loop") {
+			m.mode = m_loop;
+		}
+		else if (*token == "mute") {
+			m.mode = m_mute;
+		}
+		else if (*token == "discard") {
+			m.mode = m_discard;
+		}
+		else if (*token == "pause") {
+			m.mode = m_pause;
+		}
+		else if (*token == "restart") {
+			m.mode = m_restart;
+		}
+		else if (*token == "dont_interrupt") {
+			m.mode = m_dont_interrupt;
+		}
+		else if (*token == "loop") {
+			m.mode = m_loop;
+		}
+		else if (*token == "dtmf_stop") {
+			m.mode = m_dtmf_stop;
+		}
+		++token;
 
-		/* return wav format to caller */
-		prm->srate = fprm.srate;
-		prm->ch    = fprm.channels;
-		vq->src_prm   = *prm;
-
-		vq->fmt    = fprm.fmt;
-		vq->sampc  = prm->srate * prm->ch * ptime / 1000;
-
-		info("vqueue: audio ptime=%u sampc=%zu\n", vq->ptime, vq->sampc);
-
-		/* 1 - inf seconds of audio */
-		err = aubuf_alloc(&vq->aubuf, 0, 0);
-		if (err)
-			goto out;
-
-		err = read_file(vq);
-		if (err)
-			goto out;
-
-		tmr_start(&vq->tmr, ptime, timeout, vq);
-
-		re_atomic_rlx_set(&vq->run, true);
-		err = thread_create_name(&vq->thread, "vqueue", vqueue_thread, vq);
-		if (err) {
-			re_atomic_rlx_set(&vq->run, false);
-			goto out;
+		if (token == tokens.end()) {
+			perror("missing priority");
+			return 0;
 		}
 
-		if (join) {
-			thrd_join(vq->thread, NULL);
-			vq->errh(0, NULL, vq->arg);
+		m.priority = std::stol(*token);
+
+		info("adding Molecule priority: %d, mode: %s", m.priority, mode_string(m.mode));
+
+		while (token != tokens.end()) {
+			Atom atom;
+
+			if (*token == "p") {
+				auto args = token;
+				++args;
+
+				if (args != tokens.end()) {
+					Source src;
+					src.filename = *args;
+
+					++args;
+					if (args != tokens.end()) {
+
+						if (!is_atom_start(*args)) {
+							src.position = std::stol(*args);
+						}
+						else {
+							src.position = 0;
+						}
+					}
+
+					info("\tsrc %s %d", src.filename.c_str(), src.position);
+					m.atoms.push_back(src);
+				}
+				else {
+					perror("No filename after play atom");
+					return 0;
+				}
+			}
+			else if (*token == "r") {
+				auto args = token;
+				if (args != tokens.end()) {
+					Sink sink;
+					sink.filename = *args;
+
+					++args;
+					if (args != tokens.end()) {
+
+						if (!is_atom_start(*args)) {
+							sink.max_silence = std::stol(*args);
+						}
+						else {
+							sink.max_silence = 500;
+						}
+					}
+
+					info("\tsink %s %d", sink.filename.c_str(), sink.max_silence);
+					m.atoms.push_back(sink);
+				}
+				else {
+					perror("No filename after record atom");
+					return 0;
+				}
+			}
+			else if (*token == "d") {
+				auto args = token;
+				if (args != tokens.end()) {
+					DTMF dtmf;
+					dtmf.dtmf = *args;
+
+					++args;
+					if (args != tokens.end()) {
+
+						if (!is_atom_start(*args)) {
+							dtmf.inter_digit_delay = std::stol(*args);
+						}
+						else {
+							dtmf.inter_digit_delay = 40;
+						}
+					}
+
+					info("\tdtmf %s %d", dtmf.dtmf.c_str(), dtmf.inter_digit_delay);
+					m.atoms.push_back(dtmf);
+				}
+				else {
+					perror("No digits after atom_dtmf");
+					return 0;
+				}
+			}
+			m.atoms.push_back(atom);
 		}
 
-	out:
-		if (err)
-			mem_deref(vq);
-		else
-			*stp = (struct ausrc_st*)vq;
+		if (m.atoms.size() == 0) {
+			perror("No atom in molecule");
+			return 0;
+		}
 
-		return err;
+		return 17;
 	}
 
-	static int module_init(void)
-	{
-		int err = auplay_register(&auplay, baresip_auplayl(),
-				   "vqueue", vqueue_player_alloc);
-		err |= ausrc_register(&ausrc, baresip_ausrcl(),
-				  "vqueue", vqueue_src_alloc);
-
-		if (err) {
-			return err;
-		}
+	void vqueue_stop(const char* args) {
 	}
 
-	static int module_close(void)
-	{
-		auplay = (struct auplay*)mem_deref((void*)auplay);
-		ausrc  = (struct ausrc*)mem_deref((void*)ausrc);
-
-		return 0;
+	void vqueue_cancel(const char* args) {
 	}
-
-	EXPORT_SYM const struct mod_export DECL_EXPORTS(vqueue) = {
-		"vqueue_enqueue",
-		"vqueue_stop"
-		"vqueue_cancel",
-		module_init,
-		module_close
-	};
 };
-
-bool is_atom_start(const std::string &token) {
-	if (token == "p" || token == "r" || token == "d") {
-		return true;
-	}
-
-	return false;
-}
-
-const char* mode_string(mode m) {
-	switch (m) {
-		case m_discard:
-			return "discard";
-		case m_pause:
-			return "pause";
-		case m_mute:
-			return "mute";
-		case m_restart:
-			return "restart";
-		case m_dont_interrupt:
-			return "dont_interrupt";
-		case m_loop:
-			return "loop";
-		case m_dtmf_stop:
-			return "dtmf_stop";
-	}
-}
-
-int vqueue_enqueue(const char* args)
-{
-	std::string sargs(args);
-	std::regex ws("\\s+");
-
-	std::sregex_token_iterator iter(sargs.begin(), sargs.end(), ws, -1);
-	std::sregex_token_iterator end;
-
-	std::vector<std::string> vec(iter, end);
-	std::vector<std::string> tokens;
-
-	for (auto a: vec)
-	{
-		std::smatch m;
-		if (!std::regex_match(a, m, ws)) {
-			tokens.push_back(a);
-		}
-	}
-
-	Molecule m;
-
-	auto token = tokens.begin();
-	if (token == tokens.end()) {
-		perror("missing mode");
-		return 0;
-	}
-
-	if (*token == "loop") {
-		m.mode = m_loop;
-	}
-	else if (*token == "mute") {
-		m.mode = m_mute;
-	}
-	else if (*token == "discard") {
-		m.mode = m_discard;
-	}
-	else if (*token == "pause") {
-		m.mode = m_pause;
-	}
-	else if (*token == "restart") {
-		m.mode = m_restart;
-	}
-	else if (*token == "dont_interrupt") {
-		m.mode = m_dont_interrupt;
-	}
-	else if (*token == "loop") {
-		m.mode = m_loop;
-	}
-	else if (*token == "dtmf_stop") {
-		m.mode = m_dtmf_stop;
-	}
-	++token;
-
-	if (token == tokens.end()) {
-		perror("missing priority");
-		return 0;
-	}
-
-	m.priority = std::stol(*token);
-
-	info("adding Molecule priority: %d, mode: %s", m.priority, mode_string(m.mode));
-
-	while (token != tokens.end()) {
-		Atom atom;
-
-		if (*token == "p") {
-			auto args = token;
-			++args;
-
-			if (args != tokens.end()) {
-				Source src;
-				src.filename = *args;
-
-				++args;
-				if (args != tokens.end()) {
-
-					if (!is_atom_start(*args)) {
-						src.position = std::stol(*args);
-					}
-					else {
-						src.position = 0;
-					}
-				}
-
-				info("\tsrc %s %d", src.filename.c_str(), src.position);
-				m.atoms.push_back(src);
-			}
-			else {
-				perror("No filename after play atom");
-				return 0;
-			}
-		}
-		else if (*token == "r") {
-			auto args = token;
-			if (args != tokens.end()) {
-				Sink sink;
-				sink.filename = *args;
-
-				++args;
-				if (args != tokens.end()) {
-
-					if (!is_atom_start(*args)) {
-						sink.max_silence = std::stol(*args);
-					}
-					else {
-						sink.max_silence = 500;
-					}
-				}
-
-				info("\tsink %s %d", sink.filename.c_str(), sink.max_silence);
-				m.atoms.push_back(sink);
-			}
-			else {
-				perror("No filename after record atom");
-				return 0;
-			}
-		}
-		else if (*token == "d") {
-			auto args = token;
-			if (args != tokens.end()) {
-				DTMF dtmf;
-				dtmf.dtmf = *args;
-
-				++args;
-				if (args != tokens.end()) {
-
-					if (!is_atom_start(*args)) {
-						dtmf.inter_digit_delay = std::stol(*args);
-					}
-					else {
-						dtmf.inter_digit_delay = 40;
-					}
-				}
-
-				info("\tdtmf %s %d", dtmf.dtmf.c_str(), dtmf.inter_digit_delay);
-				m.atoms.push_back(dtmf);
-			}
-			else {
-				perror("No digits after atom_dtmf");
-				return 0;
-			}
-		}
-		m.atoms.push_back(atom);
-	}
-
-	if (m.atoms.size() == 0) {
-		perror("No atom in molecule");
-		return 0;
-	}
-
-	return 17;
-}
-
-void vqueue_stop(const char* args) {
-}
-
-void vqueue_cancel(const char* args) {
-}
