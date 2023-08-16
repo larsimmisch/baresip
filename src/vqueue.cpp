@@ -18,13 +18,15 @@ enum { PTIME = 40 };
 const int max_priority = 5;
 
 enum mode {
-	m_discard,
-	m_pause,
-	m_mute,
-	m_restart,
-	m_dont_interrupt,
-	m_loop,
-	m_dtmf_stop,
+	m_first = 1,
+	m_discard = 1,
+	m_pause = 2,
+	m_mute = 4,
+	m_restart = 8,
+	m_dont_interrupt = 16,
+	m_loop = 32,
+	m_dtmf_stop = 64,
+	m_last = 64,
 };
 
 struct Play {
@@ -66,7 +68,7 @@ static struct play *g_play;
 static VQueue vqueue;
 
 bool is_atom_start(const std::string &token) {
-	if (token == "p" || token == "r" || token == "d") {
+	if (token[0] == 'p' || token[0] == 'r' || token[0] == 'd') {
 		return true;
 	}
 
@@ -74,22 +76,43 @@ bool is_atom_start(const std::string &token) {
 }
 
 const char* mode_string(mode m) {
-	switch (m) {
-		case m_discard:
-			return "discard";
-		case m_pause:
-			return "pause";
-		case m_mute:
-			return "mute";
-		case m_restart:
-			return "restart";
-		case m_dont_interrupt:
-			return "dont_interrupt";
-		case m_loop:
-			return "loop";
-		case m_dtmf_stop:
-			return "dtmf_stop";
+
+	std::string modestr;
+
+	for (int e = m_first; e < m_last; e <<= 1) {
+		switch (e) {
+
+			if (modestr.size()) {
+				modestr += "|";
+			}
+
+			case m_discard:
+				modestr += "discard";
+				break;
+			case m_pause:
+				modestr += "pause";
+				break;
+			case m_mute:
+				modestr += "mute";
+				break;
+			case m_restart:
+				modestr += "restart";
+				break;
+			case m_dont_interrupt:
+				modestr += "dont_interrupt";
+				break;
+			case m_loop:
+				modestr += "loop";
+				break;
+			case m_dtmf_stop:
+				modestr += "dtmf_stop";
+				break;
+
+			printf(modestr.c_str());
+		}
 	}
+
+	return std::move(modestr.c_str());
 }
 
 void src_handler(struct auframe *af, void *arg) {}
@@ -117,8 +140,6 @@ int enqueue(const Molecule& m) {
 	while (true) {
 
 		for (int p = max_priority; p >= 0; --p) {
-
-			size_t molecule_start = tmr_jiffies();
 
 			while (vqueue.molecules[p].size()) {
 
@@ -232,49 +253,60 @@ int enqueue(const char* args) {
 
 	auto token = tokens.begin();
 	if (token == tokens.end()) {
-		perror("missing mode");
-		return 0;
-	}
-
-	if (*token == "loop") {
-		m.mode = m_loop;
-	}
-	else if (*token == "mute") {
-		m.mode = m_mute;
-	}
-	else if (*token == "discard") {
-		m.mode = m_discard;
-	}
-	else if (*token == "pause") {
-		m.mode = m_pause;
-	}
-	else if (*token == "restart") {
-		m.mode = m_restart;
-	}
-	else if (*token == "dont_interrupt") {
-		m.mode = m_dont_interrupt;
-	}
-	else if (*token == "loop") {
-		m.mode = m_loop;
-	}
-	else if (*token == "dtmf_stop") {
-		m.mode = m_dtmf_stop;
-	}
-	++token;
-
-	if (token == tokens.end()) {
 		perror("missing priority");
-		return 0;
+		return EINVAL;
 	}
 
-	m.priority = std::stol(*token);
+	try {
+		m.priority = std::stol(*token);
+	}
+	catch(std::exception&) {
+		perror("invalid priority");
+		return EINVAL;
+	}
 
-	info("adding Molecule priority: %d, mode: %s", m.priority, mode_string(m.mode));
+	m.mode = (mode)0;
+
+	for (int i = 0; i < 2; ++i) {
+
+		if (*token == "loop") {
+			m.mode = (mode)(m.mode | m_loop);
+		}
+		else if (*token == "mute") {
+			m.mode = (mode)(m.mode | m_mute);
+		}
+		else if (*token == "discard") {
+			m.mode = (mode)(m.mode | m_discard);
+		}
+		else if (*token == "pause") {
+			m.mode = (mode)(m.mode | m_pause);
+		}
+		else if (*token == "restart") {
+			m.mode = (mode)(m.mode | m_restart);
+		}
+		else if (*token == "dont_interrupt") {
+			m.mode = (mode)(m.mode | m_dont_interrupt);
+		}
+		else if (*token == "dtmf_stop") {
+			m.mode = (mode)(m.mode | m_dtmf_stop);
+		}
+		else {
+			break;
+		}
+		++token;
+
+		if (token == tokens.end()) {
+			perror("missing mode");
+			return 0;
+		}
+	}
+
+	// info("adding Molecule priority: %d, mode: %s", m.priority, mode_string(m.mode));
 
 	while (token != tokens.end()) {
 		Atom atom;
 
-		if (*token == "p") {
+		if (*token == "p" || *token == "play") {
 			auto args = token;
 			++args;
 
@@ -301,7 +333,7 @@ int enqueue(const char* args) {
 				return 0;
 			}
 		}
-		else if (*token == "r") {
+		else if (*token == "r" || *token == "record") {
 			auto args = token;
 			if (args != tokens.end()) {
 				Record record;
@@ -326,7 +358,7 @@ int enqueue(const char* args) {
 				return 0;
 			}
 		}
-		else if (*token == "d") {
+		else if (*token == "d" || *token == "dtmf") {
 			auto args = token;
 			if (args != tokens.end()) {
 				DTMF dtmf;

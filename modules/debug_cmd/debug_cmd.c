@@ -182,11 +182,6 @@ static int cmd_enqueue(struct re_printf *pf, void *arg)
 
 	if (str_isset(molecule))
 	{
-		err = re_hprintf(pf, "enqueuing file \"%s\" ..\n",
-				 molecule);
-		if (err)
-			return err;
-
 		err = enqueue(molecule);
 		if (err)
 		{
