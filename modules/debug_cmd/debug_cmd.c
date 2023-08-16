@@ -159,11 +159,39 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 			return err;
 
 		err = play_file(&g_play, baresip_player(), filename, 0,
-                        cfg->audio.alert_mod, cfg->audio.alert_dev);
+                        cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
 		if (err)
 		{
 			warning("debug_cmd: play_file(%s) failed (%m)\n",
 					filename, err);
+			return err;
+		}
+	}
+
+	return err;
+}
+
+static int cmd_enqueue(struct re_printf *pf, void *arg)
+{
+	struct cmd_arg *carg = arg;
+	struct config *cfg;
+	const char *molecule = carg->prm;
+	int err = 0;
+
+	cfg = conf_config();
+
+	if (str_isset(molecule))
+	{
+		err = re_hprintf(pf, "enqueuing file \"%s\" ..\n",
+				 molecule);
+		if (err)
+			return err;
+
+		err = enqueue(molecule);
+		if (err)
+		{
+			warning("debug_cmd: enqueue(%s) failed (%m)\n",
+					molecule, err);
 			return err;
 		}
 	}
@@ -379,6 +407,7 @@ static const struct cmd debugcmdv[] = {
 {"aufileinfo",  0, CMD_PRM, "Audio file info",        cmd_aufileinfo      },
 {"conf_reload", 0,       0, "Reload config file",     reload_config       },
 {"config",      0,       0, "Print configuration",    cmd_config_print    },
+{"enqueue",    'e', CMD_PRM, "Enqueue audio/DTMF/recording", cmd_enqueue  },
 {"loglevel",   'v',      0, "Log level toggle",       cmd_log_level       },
 {"main",        0,       0, "Main loop debug",        re_debug            },
 {"memstat",    'y',      0, "Memory status",          mem_status          },

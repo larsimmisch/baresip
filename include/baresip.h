@@ -774,7 +774,7 @@ typedef void (play_finish_h)(struct play *play, void *arg);
 
 int  play_file(struct play **playp, struct player *player,
 	       const char *filename, int repeat,
-	       const char *play_mod, const char *play_dev);
+	       const char *play_mod, const char *play_dev, size_t offset_ms);
 int  play_tone(struct play **playp, struct player *player,
 	       struct mbuf *tone,
 	       uint32_t srate, uint8_t ch, int repeat,
@@ -783,6 +783,12 @@ void play_set_finish_handler(struct play *play, play_finish_h *fh, void *arg);
 int  play_init(struct player **playerp);
 void play_set_path(struct player *player, const char *path);
 
+
+/*
+ * VQueue - queing audio player/recorder with priorities and interrupt modes
+ */
+
+int enqueue(const char* molecule);
 
 /*
  * User Agent

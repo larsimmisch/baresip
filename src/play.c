@@ -24,6 +24,7 @@ struct play {
 	char *dev;
 	struct tmr tmr;
 	int repeat;
+	size_t offset_ms;
 	uint64_t delay;
 	uint64_t trep;
 	bool eof;
@@ -191,7 +192,17 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 {
 	struct aufile_prm prm;
 	struct aufile *af;
+	size_t file_size = 0;
+	int fsize = 2;
 	int err;
+
+	FILE* aufile = fopen(filename, "r");
+	if (aufile) {
+		fseek(aufile, 0, SEEK_END);
+		file_size = ftell(aufile);
+		fseek(aufile, 0, SEEK_SET);
+		fclose(aufile);
+	}
 
 	err = aufile_open(&af, &prm, filename, AUFILE_READ);
 	if (err)
@@ -216,7 +227,7 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 				int16_t s = sys_ltohs(*p++);
 				err |= mbuf_write_u16(mb, s);
 			}
-
+			fsize = 2;
 			break;
 
 		case AUFMT_PCMA:
@@ -224,6 +235,7 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 				err |= mbuf_write_u16(mb,
 						      g711_alaw2pcm(buf[i]));
 			}
+			fsize = 1;
 			break;
 
 		case AUFMT_PCMU:
@@ -231,6 +243,7 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 				err |= mbuf_write_u16(mb,
 						      g711_ulaw2pcm(buf[i]));
 			}
+			fsize = 1;
 			break;
 
 		default:
@@ -242,7 +255,7 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 	mem_deref(af);
 
 	if (!err) {
-		mb->pos = 0;
+		mb->pos = (prm.srate * fsize * prm.channels / 1000) / file_size;
 
 		*srate    = prm.srate;
 		*channels = prm.channels;
@@ -401,7 +414,7 @@ static int start_auplay(struct play *play)
 static int play_file_ausrc(struct play **playp,
 		    const struct ausrc *ausrc,
 		    const char *filename, int repeat,
-		    const char *play_mod, const char *play_dev)
+		    const char *play_mod, const char *play_dev, size_t offset_ms)
 {
 	int err = 0;
 	size_t sampsz;
@@ -441,6 +454,7 @@ static int play_file_ausrc(struct play **playp,
 
 	play->sprm = sprm;
 	play->repeat = repeat ? repeat : 1;
+	play->offset_ms = offset_ms;
 	str_dup(&play->filename, filename);
 
 	sampsz = aufmt_sample_size(sprm.fmt);
@@ -515,7 +529,7 @@ static void parse_play_settings(char *file, int *repeat, int *delay)
  */
 int play_file(struct play **playp, struct player *player,
 	      const char *filename, int repeat,
-	      const char *play_mod, const char *play_dev)
+	      const char *play_mod, const char *play_dev, size_t offset_ms)
 {
 	char file[FS_PATH_MAX];
 	char path[FS_PATH_MAX];
@@ -556,7 +570,7 @@ int play_file(struct play **playp, struct player *player,
 		if (ausrc) {
 			err = play_file_ausrc(&play, ausrc,
 					      path, repeat,
-					      play_mod, play_dev);
+					      play_mod, play_dev, 0);
 
 			goto out;
 		}

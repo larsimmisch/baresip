@@ -315,7 +315,7 @@ static bool menu_play(const struct call *call,
 	menu_stop_play();
 	err = play_file(&menu.play, player, file, repeat,
 			play_mod,
-			play_dev);
+			play_dev, 0);
 	mem_deref(file);
 
 	return err == 0;
@@ -863,7 +863,7 @@ static void message_handler(struct ua *ua, const struct pl *peer,
 		  peer, mbuf_buf(body), mbuf_get_left(body));
 
 	(void)play_file(NULL, baresip_player(), "message.wav", 0,
-	                cfg->audio.alert_mod, cfg->audio.alert_dev);
+	                cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
 }
 
 
