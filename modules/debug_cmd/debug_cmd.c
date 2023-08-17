@@ -159,7 +159,7 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 			return err;
 
 		err = play_file(&g_play, baresip_player(), filename, 0,
-                        cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
+                        cfg->audio.alert_mod, cfg->audio.alert_dev);
 		if (err)
 		{
 			warning("debug_cmd: play_file(%s) failed (%m)\n",
@@ -174,15 +174,12 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 static int cmd_enqueue(struct re_printf *pf, void *arg)
 {
 	struct cmd_arg *carg = arg;
-	struct config *cfg;
 	const char *molecule = carg->prm;
 	int err = 0;
 
-	cfg = conf_config();
-
 	if (str_isset(molecule))
 	{
-		err = enqueue(molecule);
+		err = enqueue(molecule, arg);
 		if (err)
 		{
 			warning("debug_cmd: enqueue(%s) failed (%m)\n",

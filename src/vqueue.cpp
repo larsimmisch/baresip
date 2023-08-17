@@ -18,7 +18,6 @@ enum { PTIME = 40 };
 const int max_priority = 5;
 
 enum mode {
-	m_first = 1,
 	m_discard = 1,
 	m_pause = 2,
 	m_mute = 4,
@@ -51,9 +50,9 @@ using Atom = std::variant<Play, Record, DTMF>;
 struct Molecule {
 	std::vector<Atom> atoms;
 	size_t time_stopped = 0;
-	int current;
-	int priority;
-	int id;
+	size_t length_ms = 0;
+	size_t current = 0;
+	int priority = 0;
 	mode mode;
 };
 
@@ -61,6 +60,8 @@ struct VQueue {
 	std::vector<Molecule> molecules[max_priority];
 	int current_id;
 };
+
+void play_stop_handler(struct play *play, void *arg);
 
 static ausrc_st* g_rec;
 static struct play *g_play;
@@ -75,17 +76,19 @@ bool is_atom_start(const std::string &token) {
 	return false;
 }
 
-const char* mode_string(mode m) {
+std::string mode_string(mode m) {
 
 	std::string modestr;
 
-	for (int e = m_first; e < m_last; e <<= 1) {
-		switch (e) {
+	for (int e = m_last; e != 0; e >>= 1) {
 
-			if (modestr.size()) {
-				modestr += "|";
-			}
+		if (modestr.size() && modestr.back() != '|') {
+			modestr += "|";
+		}
 
+		mode em = (mode)(m & e);
+
+		switch (em) {
 			case m_discard:
 				modestr += "discard";
 				break;
@@ -107,122 +110,128 @@ const char* mode_string(mode m) {
 			case m_dtmf_stop:
 				modestr += "dtmf_stop";
 				break;
-
-			printf(modestr.c_str());
 		}
 	}
 
-	return std::move(modestr.c_str());
+	if (modestr.size() && modestr.back() == '|') {
+		modestr.pop_back();
+	}
+
+	return modestr;
 }
 
 void src_handler(struct auframe *af, void *arg) {}
 
 void src_error_handler(int err, const char *str, void *arg) {}
 
-int enqueue(const Molecule& m) {
+int schedule(void* arg) {
 
 	struct config *cfg = conf_config();
-
-	size_t time_now = tmr_jiffies();
+	struct audio* audio = call_audio((struct call*)arg);
 
 	for (int p = max_priority; p >= 0; --p) {
-		if (vqueue.molecules[p].size()) {
-			vqueue.molecules[p].back().time_stopped = time_now;
-		}
-	}
 
-	/* Stop the current player or recorder, if any */
-	g_play = (struct play*)mem_deref(g_play);
-	g_rec = (struct ausrc_st*)mem_deref(g_rec);
+		for (auto m : vqueue.molecules[p]) {
 
-	vqueue.molecules[m.priority].push_back(m);
+			if (m.atoms.size()) {
 
-	while (true) {
+				if (m.current >= m.atoms.size()) {
+					warning("Current Atom %d is out of bounds, playing last instead (%d)\n",
+						m.current, m.atoms.size() - 1);
+					m.current = m.atoms.size() - 1;
+				}
+				Atom a = vqueue.molecules[p].back().atoms[m.current];
 
-		for (int p = max_priority; p >= 0; --p) {
+				if (std::holds_alternative<Play>(a)) {
 
-			while (vqueue.molecules[p].size()) {
+					const Play& play = std::get<Play>(a);
 
-				for (auto m : vqueue.molecules[p]) {
+					info("playing %s\n", play.filename.c_str());
 
-					for (auto a: m.atoms) {
+					// mute
+					// audio_mute(audio, true);
 
-						if (std::holds_alternative<Play>(a)) {
+					int err = play_file_ext(&g_play, baresip_player(), play.filename.c_str(), 0,
+						cfg->audio.alert_mod, cfg->audio.alert_dev,
+						play.offset);
+					if (err) {
+						return err;
+					}
+					play_set_finish_handler(g_play, play_stop_handler, arg);
+				}
+				else if (std::holds_alternative<DTMF>(a)) {
 
-							const Play& play = std::get<Play>(a);
+					DTMF& d = std::get<DTMF>(a);
 
-							int err = play_file(&g_play, baresip_player(), play.filename.c_str(), 0,
-									cfg->audio.alert_mod, cfg->audio.alert_dev, play.offset);
-							if (err) {
-								return err;
-							}
-						}
-						else if (std::holds_alternative<DTMF>(a)) {
+					++d.pos;
+					if (d.pos > d.dtmf.size()) {
+						d.pos = 0;
+						break;
+					}
 
-							DTMF& d = std::get<DTMF>(a);
+					std:: string filename = "sound";
+					if (d.dtmf[d.pos] == '*') {
+						filename += "star.wav";
+					}
+					else if (d.dtmf[d.pos] == '#') {
+						filename += "route.wav";
+					}
+					else {
+						filename.append((char)tolower(d.dtmf[d.pos]), 1);
+						filename += ".wav";
+					}
 
-							++d.pos;
-							if (d.pos > d.dtmf.size()) {
-								d.pos = 0;
-								break;
-							}
+					info("DTMF playing %s\n", filename.c_str());
 
-							std:: string filename = "sound";
-							if (d.dtmf[d.pos] == '*') {
-								filename += "star.wav";
-							}
-							else if (d.dtmf[d.pos] == '#') {
-								filename += "route.wav";
-							}
-							else {
-								filename.append((char)tolower(d.dtmf[d.pos]), 1);
-								filename += ".wav";
-							}
-							int err = play_file(&g_play, baresip_player(), filename.c_str(), 0,
-									cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
-							if (err) {
-								return err;
-							}
-						}
-						else if (std::holds_alternative<Record>(a)) {
+					// mute
+					// audio_mute(audio, true);
 
-							uint32_t srate = 0;
-							uint32_t channels = 0;
+					int err = play_file_ext(&g_play, baresip_player(), filename.c_str(), 0,
+							cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
+					if (err) {
+						return err;
+					}
+					play_set_finish_handler(g_play, play_stop_handler, arg);
+				}
+				else if (std::holds_alternative<Record>(a)) {
 
-							conf_get_u32(conf_cur(), "file_srate", &srate);
-							conf_get_u32(conf_cur(), "file_channels", &channels);
+					// unmute
+					// audio_mute(audio, false);
 
-							if (!srate) {
-								srate = 16000;
-							}
+					Record& record = std::get<Record>(a);
 
-							if (!channels) {
-								channels = 1;
-							}
+					uint32_t srate = 0;
+					uint32_t channels = 0;
 
-							ausrc_prm sprm;
+					conf_get_u32(conf_cur(), "file_srate", &srate);
+					conf_get_u32(conf_cur(), "file_channels", &channels);
 
-							sprm.ch = channels;
-							sprm.srate = srate;
-							sprm.ptime = PTIME;
-							sprm.fmt = AUFMT_S16LE;
+					if (!srate) {
+						srate = 16000;
+					}
 
-							const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
+					if (!channels) {
+						channels = 1;
+					}
 
-							int err = ausrc->alloch(&g_rec, ausrc,
-								&sprm, nullptr, nullptr, nullptr, nullptr);
+					ausrc_prm sprm;
 
-							if (err) {
-								return err;
-							}
-						}
+					sprm.ch = channels;
+					sprm.srate = srate;
+					sprm.ptime = PTIME;
+					sprm.fmt = AUFMT_S16LE;
+
+					info("recording %s\n", record.filename.c_str());
+
+					const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
+
+					int err = ausrc->alloch(&g_rec, ausrc,
+						&sprm, nullptr, nullptr, nullptr, nullptr);
+
+					if (err) {
+						return err;
 					}
 				}
-			}
-
-			auto begin = vqueue.molecules[p].begin();
-			if (begin->mode != m_loop) {
-				vqueue.molecules[p].erase(begin);
 			}
 		}
 	}
@@ -230,12 +239,59 @@ int enqueue(const Molecule& m) {
 	return 0;
 }
 
-int enqueue(const char* args) {
+void play_stop_handler(struct play *play, void *arg) {
 
-	std::string sargs(args);
+	info("play file stopped\n");
+
+	/* Stop the current player or recorder, if any */
+	g_play = (struct play*)mem_deref(g_play);
+	g_rec = (struct ausrc_st*)mem_deref(g_rec);
+
+	for (int p = max_priority; p >= 0; --p) {
+		if (vqueue.molecules[p].size()) {
+			Molecule &m = vqueue.molecules[p].back();
+
+			if (m.mode & m_loop) {
+				break;
+			}
+			if (m.current >= m.atoms.size()) {
+				// the molecule is completed
+				vqueue.molecules[p].pop_back();
+			}
+			else {
+				++m.current;
+			}
+		}
+	}
+	schedule(arg);
+}
+
+int enqueue(const Molecule& m, void* arg) {
+
+	if (m.priority > 0) {
+		for (int p = m.priority - 1; p >= 0; --p) {
+			if (vqueue.molecules[p].size()) {
+				vqueue.molecules[p].back().time_stopped = tmr_jiffies();
+				break;
+			}
+		}
+	}
+
+	vqueue.molecules[m.priority].push_back(m);
+
+	/* Stop the current player or recorder, if any */
+	g_play = (struct play*)mem_deref(g_play);
+	g_rec = (struct ausrc_st*)mem_deref(g_rec);
+
+	return schedule(arg);
+}
+
+int enqueue(const char* mdesc, void* arg) {
+
+	std::string smdesc(mdesc);
 	std::regex ws("\\s+");
 
-	std::sregex_token_iterator iter(sargs.begin(), sargs.end(), ws, -1);
+	std::sregex_token_iterator iter(smdesc.begin(), smdesc.end(), ws, -1);
 	std::sregex_token_iterator end;
 
 	std::vector<std::string> vec(iter, end);
@@ -263,6 +319,13 @@ int enqueue(const char* args) {
 	catch(std::exception&) {
 		perror("invalid priority");
 		return EINVAL;
+	}
+
+	++token;
+
+	if (token == tokens.end()) {
+		perror("missing mode");
+		return 0;
 	}
 
 	m.mode = (mode)0;
@@ -301,31 +364,29 @@ int enqueue(const char* args) {
 		}
 	}
 
-	// info("adding Molecule priority: %d, mode: %s", m.priority, mode_string(m.mode));
+	info("adding Molecule priority: %d, mode: %s\n", m.priority, mode_string(m.mode).c_str());
 
 	while (token != tokens.end()) {
-		Atom atom;
 
 		if (*token == "p" || *token == "play") {
-			auto args = token;
-			++args;
 
-			if (args != tokens.end()) {
+			++token;
+			if (token != tokens.end()) {
 				Play play;
-				play.filename = *args;
+				play.filename = *token;
 
-				++args;
-				if (args != tokens.end()) {
+				++token;
+				if (token != tokens.end()) {
 
-					if (!is_atom_start(*args)) {
-						play.offset = std::stol(*args);
+					if (!is_atom_start(*token)) {
+						play.offset = std::stol(*token);
 					}
 					else {
 						play.offset = 0;
+						++token;
 					}
 				}
 
-				info("\tplay %s %d", play.filename.c_str(), play.offset);
 				m.atoms.push_back(play);
 			}
 			else {
@@ -334,23 +395,24 @@ int enqueue(const char* args) {
 			}
 		}
 		else if (*token == "r" || *token == "record") {
-			auto args = token;
-			if (args != tokens.end()) {
+			++token;
+			if (token != tokens.end()) {
 				Record record;
-				record.filename = *args;
+				record.filename = *token;
 
-				++args;
-				if (args != tokens.end()) {
+				++token;
+				if (token != tokens.end()) {
 
-					if (!is_atom_start(*args)) {
-						record.max_silence = std::stol(*args);
+					if (!is_atom_start(*token)) {
+						record.max_silence = std::stol(*token);
+						++token;
+
 					}
 					else {
 						record.max_silence = 500;
 					}
 				}
 
-				info("\trecord %s %d", record.filename.c_str(), record.max_silence);
 				m.atoms.push_back(record);
 			}
 			else {
@@ -359,23 +421,20 @@ int enqueue(const char* args) {
 			}
 		}
 		else if (*token == "d" || *token == "dtmf") {
-			auto args = token;
-			if (args != tokens.end()) {
+			++token;
+			if (token != tokens.end()) {
 				DTMF dtmf;
-				dtmf.dtmf = *args;
+				dtmf.dtmf = *token;
+				++token;
 
-				++args;
-				if (args != tokens.end()) {
-
-					if (!is_atom_start(*args)) {
-						dtmf.inter_digit_delay = std::stol(*args);
-					}
-					else {
-						dtmf.inter_digit_delay = 40;
-					}
+				if (!is_atom_start(*token)) {
+					dtmf.inter_digit_delay = std::stol(*token);
+					++token;
+				}
+				else {
+					dtmf.inter_digit_delay = 40;
 				}
 
-				info("\tdtmf %s %d", dtmf.dtmf.c_str(), dtmf.inter_digit_delay);
 				m.atoms.push_back(dtmf);
 			}
 			else {
@@ -383,7 +442,6 @@ int enqueue(const char* args) {
 				return 0;
 			}
 		}
-		m.atoms.push_back(atom);
 	}
 
 	if (m.atoms.size() == 0) {
@@ -391,5 +449,5 @@ int enqueue(const char* args) {
 		return 0;
 	}
 
-	return enqueue(m);
+	return enqueue(m, arg);
 }

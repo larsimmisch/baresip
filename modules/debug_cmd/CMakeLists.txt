@@ -1,5 +1,7 @@
 project(debug_cmd)
 
+set(CMAKE_BUILD_TYPE Debug)
+
 set(SRCS debug_cmd.c)
 
 if(STATIC)

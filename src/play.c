@@ -529,6 +529,26 @@ static void parse_play_settings(char *file, int *repeat, int *delay)
  */
 int play_file(struct play **playp, struct player *player,
 	      const char *filename, int repeat,
+	      const char *play_mod, const char *play_dev)
+{
+	return play_file_ext(playp, player, filename, repeat, play_mod, play_dev, 0);
+}
+
+/**
+ * Play an audio file in WAV format
+ *
+ * @param playp    Pointer to allocated player object
+ * @param player   Audio-file player
+ * @param filename Name of WAV file to play
+ * @param repeat   Number of times to repeat
+ * @param play_mod Audio player module
+ * @param play_dev Audio player device
+ * @param offset_ms Offset in milliseconds
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int play_file_ext(struct play **playp, struct player *player,
+	      const char *filename, int repeat,
 	      const char *play_mod, const char *play_dev, size_t offset_ms)
 {
 	char file[FS_PATH_MAX];

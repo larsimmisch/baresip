@@ -1736,6 +1736,19 @@ void audio_stop(struct audio *a)
 	a->started = false;
 }
 
+/**
+ * Stop the audio recording
+ *
+ * @param a Audio object
+ */
+void audio_stop_source(struct audio *a)
+{
+	if (!a)
+		return;
+
+	stop_rx(&a->rx);
+}
+
 
 /**
  * Check if audio has been started

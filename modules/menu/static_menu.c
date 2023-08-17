@@ -338,8 +338,6 @@ static int switch_audio_player(struct re_printf *pf, void *arg)
 
 			struct call *call = le->data;
 
-			a = call_audio(call);
-
 			err = audio_set_player(a, driver, device);
 			if (err) {
 				re_hprintf(pf, "failed to set audio-player"

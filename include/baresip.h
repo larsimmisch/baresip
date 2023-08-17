@@ -774,7 +774,11 @@ typedef void (play_finish_h)(struct play *play, void *arg);
 
 int  play_file(struct play **playp, struct player *player,
 	       const char *filename, int repeat,
-	       const char *play_mod, const char *play_dev, size_t offset_ms);
+	       const char *play_mod, const char *play_dev);
+int play_file_ext(struct play **playp, struct player *player,
+	      const char *filename, int repeat,
+	      const char *play_mod, const char *play_dev,
+		  size_t offset_ms);
 int  play_tone(struct play **playp, struct player *player,
 	       struct mbuf *tone,
 	       uint32_t srate, uint8_t ch, int repeat,
@@ -788,7 +792,7 @@ void play_set_path(struct player *player, const char *path);
  * VQueue - queing audio player/recorder with priorities and interrupt modes
  */
 
-int enqueue(const char* molecule);
+int enqueue(const char* molecule, void* arg);
 
 /*
  * User Agent
@@ -1344,6 +1348,7 @@ bool audio_rxaubuf_started(const struct audio *au);
 int  audio_start(struct audio *a);
 int  audio_start_source(struct audio *a, struct list *ausrcl,
 			struct list *aufiltl);
+void audio_stop_source(struct audio *a);
 void audio_stop(struct audio *a);
 bool audio_started(const struct audio *a);
 void audio_set_hold(struct audio *au, bool hold);
