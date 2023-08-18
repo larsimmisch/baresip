@@ -28,21 +28,77 @@ enum mode {
 	m_last = 64,
 };
 
-struct Play {
-	std::string filename;
-	size_t size = 0;
-	size_t offset = 0;
+class Play {
+
+public:
+
+	Play() {}
+	Play(const std::string& filename) { set_filename(filename); };
+
+	// returns the size in ms or 0 in case of an error
+	size_t set_filename(const std::string& filename);
+	const std::string& filename() const { return _filename; }
+
+	void set_offset(size_t offset) { _offset = offset; }
+	size_t offset() const { return _offset; }
+
+	size_t length() const { return _length; }
+
+protected:
+
+	std::string _filename;
+	size_t _length = 0; // length in ms
+	size_t _offset = 0; // offset in ms
 };
 
-struct Record {
-	std::string filename;
-	int max_silence = 500;
+class Record {
+
+public:
+
+	Record() {}
+	Record(const std::string& filename) : _filename(filename) {}
+
+	void set_filename(const std::string& filename) { _filename = filename; }
+	const std::string& filename() { return _filename; }
+
+	void set_max_silence(int max_silence) { _max_silence = max_silence; }
+	size_t max_silence() const { return _max_silence; }
+
+	size_t length() const { return _length; }
+
+protected:
+
+	std::string _filename;
+	int _max_silence = 1000;
+	size_t _length = 0;
 };
 
-struct DTMF {
-	std::string dtmf;
-	int inter_digit_delay;
-	size_t pos = 0;
+class DTMF {
+
+public:
+
+	DTMF() {}
+	DTMF(const std::string& dtmf) : _dtmf(dtmf) {}
+
+	char current() const { return _dtmf[_pos]; }
+	size_t operator++() { return  ++_pos; }
+	size_t size() const { return _dtmf.size(); }
+	void reset() { _pos = 0; }
+
+	void set_dtmf(const std::string& dtmf) { _dtmf = dtmf; }
+	const std::string& dtmf() const { return _dtmf; }
+
+	int inter_digit_delay() const { return _inter_digit_delay; }
+	void set_inter_digit_delay(int inter_digit_delay) { _inter_digit_delay = inter_digit_delay; }
+
+	size_t length() const { return _length; }
+
+protected:
+
+	std::string _dtmf;
+	int _inter_digit_delay = 100;
+	size_t _pos = 0;
+	size_t _length = 0;
 };
 
 using Atom = std::variant<Play, Record, DTMF>;
@@ -54,12 +110,33 @@ struct Molecule {
 	size_t current = 0;
 	int priority = 0;
 	mode mode;
+
+	size_t length() const;
 };
 
 struct VQueue {
 	std::vector<Molecule> molecules[max_priority];
 	int current_id;
 };
+
+size_t Molecule::length() const {
+	size_t l = 0;
+
+	for (auto a: atoms) {
+
+		if (std::holds_alternative<Play>(a)) {
+			l += std::get<Play>(a).length();
+		}
+		else if (std::holds_alternative<DTMF>(a)) {
+			l += std::get<DTMF>(a).length();
+		}
+		if (std::holds_alternative<Record>(a)) {
+			l += std::get<Record>(a).length();
+		}
+	}
+
+	return l;
+}
 
 void play_stop_handler(struct play *play, void *arg);
 
@@ -74,6 +151,25 @@ bool is_atom_start(const std::string &token) {
 	}
 
 	return false;
+}
+
+size_t Play::set_filename(const std::string& filename) {
+
+	struct aufile* au;
+	struct aufile_prm prm;
+
+	int err = aufile_open(&au, &prm, _filename.c_str(), AUFILE_READ);
+	if (err) {
+		return 0;
+	}
+
+	size_t length = aufile_get_length(au, &prm);
+
+	mem_deref(au);
+
+	_filename = filename;
+
+	return length;
 }
 
 std::string mode_string(mode m) {
@@ -146,14 +242,14 @@ int schedule(void* arg) {
 
 					const Play& play = std::get<Play>(a);
 
-					info("playing %s\n", play.filename.c_str());
+					info("playing %s\n", play.filename().c_str());
 
 					// mute
 					// audio_mute(audio, true);
 
-					int err = play_file_ext(&g_play, baresip_player(), play.filename.c_str(), 0,
+					int err = play_file_ext(&g_play, baresip_player(), play.filename().c_str(), 0,
 						cfg->audio.alert_mod, cfg->audio.alert_dev,
-						play.offset);
+						play.offset());
 					if (err) {
 						return err;
 					}
@@ -163,21 +259,20 @@ int schedule(void* arg) {
 
 					DTMF& d = std::get<DTMF>(a);
 
-					++d.pos;
-					if (d.pos > d.dtmf.size()) {
-						d.pos = 0;
+					if (++d > d.size()) {
+						d.reset();
 						break;
 					}
 
 					std:: string filename = "sound";
-					if (d.dtmf[d.pos] == '*') {
+					if (d.current() == '*') {
 						filename += "star.wav";
 					}
-					else if (d.dtmf[d.pos] == '#') {
+					else if (d.current() == '#') {
 						filename += "route.wav";
 					}
 					else {
-						filename.append((char)tolower(d.dtmf[d.pos]), 1);
+						filename.append((char)tolower(d.current()), 1);
 						filename += ".wav";
 					}
 
@@ -221,7 +316,7 @@ int schedule(void* arg) {
 					sprm.ptime = PTIME;
 					sprm.fmt = AUFMT_S16LE;
 
-					info("recording %s\n", record.filename.c_str());
+					info("recording %s\n", record.filename().c_str());
 
 					const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
 
@@ -252,6 +347,7 @@ void play_stop_handler(struct play *play, void *arg) {
 			Molecule &m = vqueue.molecules[p].back();
 
 			if (m.mode & m_loop) {
+				m.current = (m.current + 1) % m.atoms.size();
 				break;
 			}
 			if (m.current >= m.atoms.size()) {
@@ -373,16 +469,15 @@ int enqueue(const char* mdesc, void* arg) {
 			++token;
 			if (token != tokens.end()) {
 				Play play;
-				play.filename = *token;
+				play.set_filename(*token);
 
 				++token;
 				if (token != tokens.end()) {
 
 					if (!is_atom_start(*token)) {
-						play.offset = std::stol(*token);
+						play.set_offset(std::stol(*token));
 					}
 					else {
-						play.offset = 0;
 						++token;
 					}
 				}
@@ -398,18 +493,15 @@ int enqueue(const char* mdesc, void* arg) {
 			++token;
 			if (token != tokens.end()) {
 				Record record;
-				record.filename = *token;
+				record.set_filename(*token);
 
 				++token;
 				if (token != tokens.end()) {
 
 					if (!is_atom_start(*token)) {
-						record.max_silence = std::stol(*token);
+						record.set_max_silence(std::stol(*token));
 						++token;
 
-					}
-					else {
-						record.max_silence = 500;
 					}
 				}
 
@@ -424,15 +516,12 @@ int enqueue(const char* mdesc, void* arg) {
 			++token;
 			if (token != tokens.end()) {
 				DTMF dtmf;
-				dtmf.dtmf = *token;
+				dtmf.set_dtmf(*token);
 				++token;
 
 				if (!is_atom_start(*token)) {
-					dtmf.inter_digit_delay = std::stol(*token);
+					dtmf.set_inter_digit_delay(std::stol(*token));
 					++token;
-				}
-				else {
-					dtmf.inter_digit_delay = 40;
 				}
 
 				m.atoms.push_back(dtmf);
