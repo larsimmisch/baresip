@@ -58,7 +58,7 @@ public:
 	Record(const std::string& filename) : _filename(filename) {}
 
 	void set_filename(const std::string& filename) { _filename = filename; }
-	const std::string& filename() { return _filename; }
+	const std::string& filename() const { return _filename; }
 
 	void set_max_silence(int max_silence) { _max_silence = max_silence; }
 	size_t max_silence() const { return _max_silence; }
@@ -90,7 +90,7 @@ public:
 	int inter_digit_delay() const { return _inter_digit_delay; }
 	void set_inter_digit_delay(int inter_digit_delay) { _inter_digit_delay = inter_digit_delay; }
 
-	void set_offset(size_t offset);
+	void set_offset(size_t offset) {}
 
 	size_t length() const { return _length; }
 
@@ -107,16 +107,17 @@ using Atom = std::variant<Play, Record, DTMF>;
 
 struct Molecule {
 	std::vector<Atom> atoms;
-	size_t time_stopped = 0;
 	size_t time_started = 0;
+	size_t time_stopped = 0;
 	size_t position = 0;
 	size_t current = 0;
 	int priority = 0;
 	mode mode;
 
 	size_t length(int start = 0, int end = -1) const;
-	// returns true if Molecule is completed
-	bool set_position(size_t position_ms);
+	void set_position(size_t position_ms);
+	// return a description of the Molecule
+	std::string desc() const;
 };
 
 struct VQueue {
@@ -125,148 +126,25 @@ struct VQueue {
 	std::vector<Molecule>::iterator next();
 	std::vector<Molecule>::iterator end() { return molecules[0].end(); }
 
+	int schedule(Molecule* stopped);
+
+	int enqueue(const Molecule& m, void* arg);
+	int enqueue(const char* mdesc, void* arg);
+
 	std::vector<Molecule> molecules[max_priority];
 	int current_id;
 };
 
-size_t Molecule::length(int start, int end) const {
-	size_t l = 0;
-
-	if (end < 0) {
-		end = atoms.size();
-	}
-
-	for (int i = start; i < end; ++i) {
-
-		const Atom& a = atoms[i];
-
-		if (std::holds_alternative<Play>(a)) {
-			l += std::get<Play>(a).length();
-		}
-		else if (std::holds_alternative<DTMF>(a)) {
-			l += std::get<DTMF>(a).length();
-		}
-		if (std::holds_alternative<Record>(a)) {
-			l += std::get<Record>(a).length();
-		}
-	}
-
-	return l;
-}
-
-bool Molecule::set_position(size_t position) {
-
-	// search the correct atom/offset to select
-	size_t l = 0;
-	size_t l_prev = 0;
-
-	for (size_t i = 0; i < atoms.size(); ++i) {
-
-		Atom& a = atoms[i];
-
-		if (std::holds_alternative<Play>(a)) {
-			l += std::get<Play>(a).length();
-		}
-		else if (std::holds_alternative<DTMF>(a)) {
-			l += std::get<DTMF>(a).length();
-		}
-		else if (std::holds_alternative<Record>(a)) {
-			l += std::get<Record>(a).length();
-		}
-
-		if (l >= position) {
-			if (mode & m_mute) {
-
-				size_t offset = (position % length() - l_prev);
-
-				current = i;
-
-				if (std::holds_alternative<Play>(a)) {
-					std::get<Play>(a).set_offset(offset);
-				}
-				else if (std::holds_alternative<DTMF>(a)) {
-					std::get<Play>(a).set_offset(offset);
-				}
-
-				return false;
-			}
-			else if (mode & m_pause) {
-				if (position > l) {
-					return true;
-				}
-			}
-		}
-
-		l_prev = l;
-	}
-}
-
-void VQueue::discard(Molecule* m) {
-	for (auto i = molecules[m->priority].begin();
-		i != molecules[m->priority].end(); ++i) {
-
-		if (m == &(*i)) {
-			molecules[m->priority].erase(i);
-			break;
-		}
-	}
-}
-
-std::vector<Molecule>::iterator VQueue::next() {
-
-	for (int p = max_priority; p >= 0; --p) {
-
-		for (std::vector<Molecule>::iterator i = molecules[p].begin(); i != molecules[p].end(); ++i) {
-
-			if (i->atoms.size()) {
-				return i;
-			}
-		}
-	}
-
-	return end();
-}
-
 void play_stop_handler(struct play *play, void *arg);
+
+//-------------------------------------------------------------------------
 
 static ausrc_st* g_rec;
 static struct play *g_play;
 
 static VQueue vqueue;
 
-bool is_atom_start(const std::string &token) {
-	if (token[0] == 'p' || token[0] == 'r' || token[0] == 'd') {
-		return true;
-	}
-
-	return false;
-}
-
-size_t Play::set_filename(const std::string& filename) {
-
-	struct aufile* au;
-	struct aufile_prm prm;
-	struct config_audio *cfg = &conf_config()->audio;
-
-	_filename = filename;
-
-	std::string path(cfg->audio_path);
-	if (path.back() != '/') {
-		path += "/";
-	}
-	path += filename;
-
-	int err = aufile_open(&au, &prm, path.c_str(), AUFILE_READ);
-	if (err) {
-		return 0;
-	}
-
-	size_t length = aufile_get_length(au, &prm);
-
-	mem_deref(au);
-
-	return length;
-}
+//-------------------------------------------------------------------------
 
 std::string mode_string(mode m) {
 
@@ -309,28 +187,211 @@ std::string mode_string(mode m) {
 	return modestr;
 }
 
-void src_handler(struct auframe *af, void *arg) {}
+bool is_atom_start(const std::string &token) {
+	if (token[0] == 'p' || token[0] == 'r' || token[0] == 'd') {
+		return true;
+	}
 
-void src_error_handler(int err, const char *str, void *arg) {}
+	return false;
+}
 
-int schedule(void* arg) {
+size_t Play::set_filename(const std::string& filename) {
 
-	Molecule* stopped = (Molecule*)arg;
+	struct aufile* au;
+	struct aufile_prm prm;
+	struct config_audio *cfg = &conf_config()->audio;
+
+	_filename = filename;
+
+	std::string path(cfg->audio_path);
+	if (path.back() != '/') {
+		path += "/";
+	}
+	path += filename;
+
+	int err = aufile_open(&au, &prm, path.c_str(), AUFILE_READ);
+	if (err) {
+		return 0;
+	}
+
+	size_t length = aufile_get_length(au, &prm);
+
+	mem_deref(au);
+
+	return length;
+}
+
+// @pragma mark Molecule
+
+size_t Molecule::length(int start, int end) const {
+	size_t l = 0;
+
+	if (end < 0) {
+		end = atoms.size();
+	}
+
+	for (int i = start; i < end; ++i) {
+
+		const Atom& a = atoms[i];
+
+		if (std::holds_alternative<Play>(a)) {
+			l += std::get<Play>(a).length();
+		}
+		else if (std::holds_alternative<DTMF>(a)) {
+			l += std::get<DTMF>(a).length();
+		}
+		if (std::holds_alternative<Record>(a)) {
+			l += std::get<Record>(a).length();
+		}
+	}
+
+	return l;
+}
+
+void Molecule::set_position(size_t position) {
+
+	// search the correct atom/offset to select
+	size_t l = 0;
+	size_t l_prev = 0;
+
+	if (mode & m_loop) {
+		position %= length();
+	}
+
+	for (size_t i = 0; i < atoms.size(); ++i) {
+
+		Atom& a = atoms[i];
+
+		if (std::holds_alternative<Play>(a)) {
+			l += std::get<Play>(a).length();
+		}
+		else if (std::holds_alternative<DTMF>(a)) {
+			l += std::get<DTMF>(a).length();
+		}
+		else if (std::holds_alternative<Record>(a)) {
+			l += std::get<Record>(a).length();
+		}
+
+		if (l >= position) {
+			if (mode & m_mute) {
+
+				size_t offset = (position - l_prev);
+
+				current = i;
+
+				if (std::holds_alternative<Play>(a)) {
+					std::get<Play>(a).set_offset(offset);
+				}
+				else if (std::holds_alternative<DTMF>(a)) {
+					std::get<DTMF>(a).set_offset(offset);
+				}
+
+				return;
+			}
+		}
+
+		l_prev = l;
+	}
+}
+
+std::string Molecule::desc() const {
+	std::string desc = std::to_string(priority) + ' ' + mode_string(mode);
+
+	for (auto a: atoms) {
+		if (std::holds_alternative<Play>(a)) {
+			const Play& p = std::get<Play>(a);
+			desc += " play " + p.filename();
+		}
+		else if (std::holds_alternative<DTMF>(a)) {
+			const DTMF& d = std::get<DTMF>(a);
+			desc += " dtmf " + d.dtmf();
+		}
+		else if (std::holds_alternative<Record>(a)) {
+			const Record& r = std::get<Record>(a);
+			desc += " record " + r.filename();
+		}
+	}
+
+	return desc;
+}
+
+// @pragma mark VQueue
+
+void VQueue::discard(Molecule* m) {
+	for (auto i = molecules[m->priority].begin();
+		i != molecules[m->priority].end(); ++i) {
+
+		if (m == &(*i)) {
+			molecules[m->priority].erase(i);
+			break;
+		}
+	}
+}
+
+std::vector<Molecule>::iterator VQueue::next() {
+
+	for (int p = max_priority; p >= 0; --p) {
+
+		for (std::vector<Molecule>::iterator i = molecules[p].begin(); i != molecules[p].end(); ++i) {
+
+			if (i->atoms.size()) {
+				return i;
+			}
+		}
+	}
+
+	return end();
+}
+
+int VQueue::schedule(Molecule* stopped) {
+
 	struct config *cfg = conf_config();
+	size_t now = tmr_jiffies();
 
-	std::vector<Molecule>::iterator next = vqueue.next();
-	if (next != vqueue.end()) {
+	std::vector<Molecule>::iterator n = next();
 
-		if (stopped->time_stopped) {
-			next->position = (next->position + stopped->time_stopped - tmr_jiffies());
+	if (stopped) {
+		// Just remove Molecules with m_discard
+		if (stopped->mode & m_discard) {
+			discard(stopped);
+			n = next();
+		}
+		else if (n != end() && stopped == &(*n)) {
+			// The current molecule was stopped
+			++n->current;
+			if (n->current >= n->atoms.size()) {
+				discard(stopped);
+				n = next();
+			}
+		}
+	}
+
+	while (n != end()) {
+
+		if (n->mode & m_pause) {
+			n->set_position(n->position);
+		}
+		else {
+			size_t pos = now - n->time_stopped;
+
+			if (n->mode & m_mute) {
+
+				if (pos >= n->length()) {
+					if (n->mode & m_mute) {
+						discard(&(*n));
+						n = next();
+					}
+					else if (n->mode & m_loop) {
+						pos = pos % n->length();
+					}
+
+					n->set_position(pos);
+					break;
+				}
+			}
 		}
 
-		if (next->current >= next->atoms.size()) {
-			warning("Current Atom %d is out of bounds, playing last instead (%d)\n",
-				next->current, next->atoms.size() - 1);
-			next->current = next->atoms.size() - 1;
-		}
-		Atom a = next->atoms[next->current];
+		Atom a = n->atoms[n->current];
 
 		if (std::holds_alternative<Play>(a)) {
 
@@ -347,7 +408,7 @@ int schedule(void* arg) {
 			if (err) {
 				return err;
 			}
-			play_set_finish_handler(g_play, play_stop_handler, (void*)&(*next));
+			play_set_finish_handler(g_play, play_stop_handler, (void*)&(*n));
 		}
 		else if (std::holds_alternative<DTMF>(a)) {
 
@@ -355,9 +416,9 @@ int schedule(void* arg) {
 
 			if (++d > d.size()) {
 				d.reset();
-				next->current++;
-				if (next->current >= next->atoms.size()) {
-					return schedule(&(*vqueue.next()));
+				n->current++;
+				if (n->current >= n->atoms.size()) {
+					return schedule(&(*n));
 				}
 			}
 
@@ -383,7 +444,7 @@ int schedule(void* arg) {
 			if (err) {
 				return err;
 			}
-			play_set_finish_handler(g_play, play_stop_handler, arg);
+			play_set_finish_handler(g_play, play_stop_handler, &(*n));
 		}
 		else if (std::holds_alternative<Record>(a)) {
 
@@ -424,46 +485,18 @@ int schedule(void* arg) {
 				return err;
 			}
 		}
+
+		n = vqueue.next();
 	}
 
-	next->time_started = tmr_jiffies();
+	if (n != end() && n->current == 0) {
+		n->time_started = tmr_jiffies();
+	}
 
 	return 0;
 }
 
-void play_stop_handler(struct play *play, void *arg) {
-
-	info("play file previous\n");
-
-	/* Stop the current player or recorder, if any */
-	g_play = (struct play*)mem_deref(g_play);
-	g_rec = (struct ausrc_st*)mem_deref(g_rec);
-
-	Molecule* stopped = (Molecule*)arg;
-
-	stopped->time_stopped = tmr_jiffies();
-
-	// Just remove Molecules with m_discard
-	if (stopped->mode & m_discard) {
-
-		vqueue.discard(stopped);
-		schedule(arg);
-		return;
-	}
-
-	schedule(arg);
-}
-
-int enqueue(const Molecule& m, void* arg) {
-
-	if (m.priority > 0) {
-		for (int p = m.priority - 1; p >= 0; --p) {
-			if (vqueue.molecules[p].size()) {
-				vqueue.molecules[p].back().time_stopped = tmr_jiffies();
-				break;
-			}
-		}
-	}
+int VQueue::enqueue(const Molecule& m, void* arg) {
 
 	vqueue.molecules[m.priority].push_back(m);
 
@@ -471,10 +504,15 @@ int enqueue(const Molecule& m, void* arg) {
 	g_play = (struct play*)mem_deref(g_play);
 	g_rec = (struct ausrc_st*)mem_deref(g_rec);
 
-	return schedule(arg);
+	auto stopped = next();
+	if (stopped != end()) {
+		return schedule(&(*stopped));
+	}
+
+	return schedule(nullptr);
 }
 
-int enqueue(const char* mdesc, void* arg) {
+int VQueue::enqueue(const char* mdesc, void* arg) {
 
 	std::string smdesc(mdesc);
 	std::regex ws("\\s+");
@@ -628,4 +666,22 @@ int enqueue(const char* mdesc, void* arg) {
 	}
 
 	return enqueue(m, arg);
+}
+
+
+void play_stop_handler(struct play *play, void *arg) {
+
+	info("play file previous\n");
+	size_t now = tmr_jiffies();
+
+	/* Stop the current player or recorder, if any */
+	g_play = (struct play*)mem_deref(g_play);
+	g_rec = (struct ausrc_st*)mem_deref(g_rec);
+
+	Molecule* stopped = (Molecule*)arg;
+
+	stopped->time_stopped = now;
+	stopped->position = now - stopped->time_started;
+
+	vqueue.schedule((Molecule*)arg);
 }
