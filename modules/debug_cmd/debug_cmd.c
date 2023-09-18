@@ -143,14 +143,20 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 {
 	struct cmd_arg *carg = arg;
 	struct config *cfg;
-	char filename[4096] = { 0 };
 	int offset = 0;
 	int err = 0;
 
 	/* Stop the current tone, if any */
 	g_play = mem_deref(g_play);
 
-	if (str_isset(carg->prm) && sscanf(carg->prm, "%4095s %d", filename, &offset)) {
+	if (str_isset(carg->prm)) {
+
+		char filename[strlen(carg->prm)];
+
+		if (!sscanf(carg->prm, "%s %d", filename, &offset)) {
+			warning("debug_cmd: play_file failed to parse input\n");
+			return EINVAL;
+		}
 
 		cfg = conf_config();
 
@@ -167,9 +173,6 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 					filename, err);
 			return err;
 		}
-	}
-	else {
-		warning("debug_cmd: play_file failed to parse input\n");
 	}
 
 	return err;
