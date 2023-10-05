@@ -223,8 +223,18 @@ int aufile_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 		goto out;
 	}
 
-	info("aufile: %s: %u Hz, %d channels, %s\n",
-	     dev, fprm.srate, fprm.channels, aufmt_name(fprm.fmt));
+	if (prm->offset) {
+		err = aufile_set_position(st->aufile, &fprm, prm->offset);
+		if (err) {
+			warning("aufile: failed to set position to %d (%m)\n",
+				prm->offset, err);
+			goto out;
+		}
+	}
+
+	info("aufile: %s: %u Hz, %d channels, %s offset %d\n",
+	     dev, fprm.srate, fprm.channels, aufmt_name(fprm.fmt),
+		 prm->offset);
 
 	/* return wav format to caller */
 	prm->srate = fprm.srate;

@@ -1050,6 +1050,7 @@ static int start_source(struct autx *tx, struct audio *a, struct list *ausrcl)
 		prm.ch         = channels_dsp;
 		prm.ptime      = tx->ptime;
 		prm.fmt        = tx->src_fmt;
+		prm.offset     = 0;
 
 		tx->ausrc_prm = prm;
 
@@ -1726,10 +1727,12 @@ int audio_set_devicename(struct audio *a, const char *src, const char *play)
  * @param au     Audio object
  * @param mod    Audio source module (NULL to stop)
  * @param device Audio source device name
+ * @param offset Offset into the audio (only valid for the aufile module)
  *
  * @return 0 if success, otherwise errorcode
  */
-int audio_set_source(struct audio *au, const char *mod, const char *device)
+int audio_set_source_offset(struct audio *au, const char *mod,
+	const char *device, size_t offset)
 {
 	struct autx *tx;
 	int err;
@@ -1744,6 +1747,8 @@ int audio_set_source(struct audio *au, const char *mod, const char *device)
 
 	if (str_isset(mod)) {
 
+		tx->ausrc_prm.offset = offset;
+
 		err = ausrc_alloc(&tx->ausrc, baresip_ausrcl(),
 				  mod, &tx->ausrc_prm, device,
 				  ausrc_read_handler, ausrc_error_handler, au);
@@ -1757,6 +1762,22 @@ int audio_set_source(struct audio *au, const char *mod, const char *device)
 	}
 
 	return 0;
+}
+
+
+/**
+ * Set the extended audio source state to a new audio source module and device.
+ * The current audio source will be stopped.
+ *
+ * @param au     Audio object
+ * @param mod    Audio source module (NULL to stop)
+ * @param device Audio source device name
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int audio_set_source(struct audio *au, const char *mod, const char *device)
+{
+	return audio_set_source_offset(au, mod, device, 0);
 }
 
 
