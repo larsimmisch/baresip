@@ -59,21 +59,16 @@ static void print_rtcp_summary_line(const struct call *call,
 }
 
 
-static void ua_event_handler(struct ua *ua,
-			     enum ua_event ev,
-			     struct call *call,
-			     const char *prm,
-			     void *arg)
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
 	const struct stream *s;
 	struct le *le;
-	(void)ua;
-	(void)prm;
+	struct call *call = bevent_get_call(event);
 	(void)arg;
 
 	switch (ev) {
 
-	case UA_EVENT_CALL_CLOSED:
+	case BEVENT_CALL_CLOSED:
 		for (le = call_streaml(call)->head;
 		     le;
 		     le = le->next) {
@@ -90,7 +85,7 @@ static void ua_event_handler(struct ua *ua,
 
 static int module_init(void)
 {
-	int err = uag_event_register(ua_event_handler, NULL);
+	int err = bevent_register(event_handler, NULL);
 	if (err) {
 		info("Error loading rtcpsummary module: %d", err);
 		return err;
@@ -102,7 +97,7 @@ static int module_init(void)
 static int module_close(void)
 {
 	debug("rtcpsummary: module closing..\n");
-	uag_event_unregister(ua_event_handler);
+	bevent_unregister(event_handler);
 	return 0;
 }
 

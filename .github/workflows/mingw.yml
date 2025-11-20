@@ -10,7 +10,7 @@ on:
 
 jobs:
   MinGW-w64-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
 
@@ -23,7 +23,7 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y mingw-w64
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - uses: sreimers/pr-dependency-action@v1
       with:
@@ -41,7 +41,7 @@ jobs:
       run: |
         mv re baresip-win32/
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         path: baresip-win32/baresip
 
@@ -49,14 +49,14 @@ jobs:
       id: openssl
       with:
         path: baresip-win32/openssl
-        key: ${{ runner.os }}-mingw-openssl-3.0.7
+        key: ${{ runner.os }}-mingw-openssl-3.5.0
 
     - name: "build openssl"
       if: steps.openssl.outputs.cache-hit != 'true'
       run: |
-        wget https://www.openssl.org/source/openssl-3.0.7.tar.gz
-        tar -xzf openssl-3.0.7.tar.gz
-        mv openssl-3.0.7 baresip-win32/openssl
+        wget https://www.openssl.org/source/openssl-3.5.0.tar.gz
+        tar -xzf openssl-3.5.0.tar.gz
+        mv openssl-3.5.0 baresip-win32/openssl
         make -j$(nproc) -C baresip-win32 openssl
 
     - name: "build"
@@ -69,12 +69,12 @@ jobs:
         retention-days: 1
 
   wintest:
-    runs-on: windows-2019
+    runs-on: windows-latest
     needs: MinGW-w64-build
 
     steps:
     - uses: actions/download-artifact@v4
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         path: baresip
 

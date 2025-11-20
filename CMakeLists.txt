@@ -1,9 +1,9 @@
 #
 # CMakeLists.txt
 #
-# Copyright (C) 2010 - 2022 Alfred E. Heggestad
-# Copyright (C) 2022 Sebastian Reimers
-# Copyright (C) 2023 Christian Spielberger
+# Copyright (C) 2010 - 2025 Alfred E. Heggestad
+# Copyright (C) 2022 - 2025 Sebastian Reimers
+# Copyright (C) 2023 - 2025 Christian Spielberger
 #
 
 ##############################################################################
@@ -11,11 +11,11 @@
 # Versioning
 #
 
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.18...4.0)
 
-project(baresip VERSION 3.13.0)
+project(baresip VERSION 4.3.0)
 
-set(PROJECT_SOVERSION 16) # bump if ABI breaks
+set(PROJECT_SOVERSION 23) # bump if ABI breaks
 
 # Pre-release identifier, comment out on a release
 # Increment for breaking changes (dev2, dev3...)
@@ -53,10 +53,8 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 
-list(FIND CMAKE_C_IMPLICIT_LINK_DIRECTORIES
-  "${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}" IS_SYSTEM_DIR)
-if(IS_SYSTEM_DIR STREQUAL "-1")
-  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}")
+if(APPLE)
+  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
@@ -88,6 +86,7 @@ else()
       -Watomic-implicit-seq-cst
       -Wshorten-64-to-32
       -Wno-gnu-zero-variadic-macro-arguments
+      -Wno-c2x-extensions
     )
   endif()
 
@@ -105,6 +104,7 @@ list(APPEND RE_DEFINITIONS
   VER_MAJOR=${PROJECT_VERSION_MAJOR}
   VER_MINOR=${PROJECT_VERSION_MINOR}
   VER_PATCH=${PROJECT_VERSION_PATCH}
+  _GNU_SOURCE
 )
 
 add_compile_definitions(${RE_DEFINITIONS})
@@ -158,6 +158,7 @@ set(SRCS
   src/aureceiver.c
   src/ausrc.c
   src/baresip.c
+  src/bevent.c
   src/bundle.c
   src/call.c
   src/cmd.c
@@ -167,9 +168,8 @@ set(SRCS
   src/custom_hdrs.c
   src/descr.c
   src/dial_number.c
-  src/bevent.c
-  src/jbuf.c
   src/http.c
+  src/jbuf.c
   src/log.c
   src/mediadev.c
   src/mediatrack.c
@@ -210,6 +210,9 @@ set(HEADERS
 #
 
 include(modules)
+
+set(G722_MODULE_SELECTED ""
+    CACHE INTERNAL "Selected G722 implementation" FORCE)
 
 set(MODULES_DETECTED "")
 
@@ -296,14 +299,11 @@ set_target_properties(baresip_exe PROPERTIES OUTPUT_NAME baresip)
 
 target_link_libraries(baresip_exe PRIVATE baresip ${LINKLIBS})
 
+
 ##############################################################################
 #
-# Packaging section
+# PKGCONF section
 #
-
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  add_subdirectory(packaging)
-endif()
 
 configure_file(packaging/libbaresip.pc.in libbaresip.pc @ONLY)
 
@@ -385,9 +385,28 @@ install(TARGETS baresip
     COMPONENT Development
 )
 
-file(GLOB SHARE_FILES "${PROJECT_SOURCE_DIR}/share/*")
+file(GLOB SHARE_FILES
+  "${PROJECT_SOURCE_DIR}/share/*.png"
+  "${PROJECT_SOURCE_DIR}/share/*.wav"
+)
+file(GLOB DESKTOP_FILES "${PROJECT_SOURCE_DIR}/share/*.desktop")
 
 install(FILES ${SHARE_FILES}
   DESTINATION ${CMAKE_INSTALL_DATADIR}/baresip
   COMPONENT Applications
 )
+
+install(FILES ${DESKTOP_FILES}
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+  COMPONENT Applications
+)
+
+
+##############################################################################
+#
+# Packaging section
+#
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  add_subdirectory(packaging)
+endif()

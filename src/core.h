@@ -88,6 +88,10 @@ struct account {
 	char *ausrc_dev;
 	char *auplay_mod;
 	char *auplay_dev;
+	char *vidsrc_mod;
+	char *vidsrc_dev;
+	char *viddisp_mod;
+	char *viddisp_dev;
 	uint32_t autelev_pt;         /**< Payload type for telephone-events  */
 	char *extra;                 /**< Extra parameters                   */
 	char *uas_user;              /**< UAS authentication username        */
@@ -106,6 +110,7 @@ struct audio;
 
 int  audio_send_digit(struct audio *a, char key);
 void audio_sdp_attr_decode(struct audio *a);
+int  audio_enable_level(struct audio *au);
 
 
 /*
@@ -133,6 +138,7 @@ int  aurecv_set_device(struct audio_recv *ar, const char *device);
 void aurecv_receive(struct audio_recv *ar, const struct rtp_header *hdr,
 		    struct rtpext *extv, size_t extc,
 		    struct mbuf *mb, unsigned lostc, bool *ignore);
+void aurecv_reset(struct audio_recv *ar);
 int  aurecv_start_player(struct audio_recv *ar, struct list *auplayl);
 bool aurecv_player_started(const struct audio_recv *ar);
 void aurecv_stop(struct audio_recv *ar);
@@ -197,7 +203,6 @@ int custom_hdrs_print(struct re_printf *pf,
 
 int conf_get_csv(const struct conf *conf, const char *name,
 		 char *str1, size_t sz1, char *str2, size_t sz2);
-int conf_get_float(const struct conf *conf, const char *name, double *val);
 
 
 struct metric;
@@ -239,6 +244,7 @@ int  reg_json_api(struct odict *od, const struct reg *reg);
 int  reg_status(struct re_printf *pf, const struct reg *reg);
 int  reg_af(const struct reg *reg);
 const struct sa *reg_laddr(const struct reg *reg);
+const struct sa *reg_paddr(const struct reg *reg);
 void reg_set_custom_hdrs(struct reg *reg, const struct list *hdrs);
 
 /*
@@ -305,7 +311,8 @@ enum {STREAM_PRESZ = 4+12}; /* same as RTP_HEADER_SIZE */
 
 typedef void (stream_rtp_h)(const struct rtp_header *hdr,
 			    struct rtpext *extv, size_t extc,
-			    struct mbuf *mb, unsigned lostc, bool *ignore,
+			    struct mbuf *mb, unsigned lostc, bool new_source,
+			    bool *ignore,
 			    void *arg);
 typedef int (stream_pt_h)(uint8_t pt, struct mbuf *mb, void *arg);
 
@@ -393,7 +400,6 @@ struct uag {
 	sip_msg_h *subh;               /**< Subscribe handler               */
 	ua_exit_h *exith;              /**< UA Exit handler                 */
 	bool nodial;                   /**< Prevent outgoing calls          */
-	bool dnd;                      /**< Do not Disturb flag             */
 	void *arg;                     /**< UA Exit handler argument        */
 	char *eprm;                    /**< Extra UA parameters             */
 #ifdef USE_TLS
@@ -526,3 +532,4 @@ void rtprecv_mnat_connected_handler(const struct sa *raddr1,
 int  rtprecv_start_rtcp(struct rtp_receiver *rx, const char *cname,
 			const struct sa *peer, bool pinhole);
 bool rtprecv_running(const struct rtp_receiver *rx);
+void rtprecv_set_srate(struct rtp_receiver *rx, uint32_t srate);

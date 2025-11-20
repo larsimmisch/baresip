@@ -31,7 +31,10 @@ static void success_cb(pa_stream *s, int success, void *arg)
 	(void)success;
 	(void)arg;
 
-	pa_threaded_mainloop_signal(paconn_get()->mainloop, 0);
+	struct paconn_st *c = paconn_get();
+
+	if (c)
+		pa_threaded_mainloop_signal(c->mainloop, 0);
 }
 
 
@@ -50,7 +53,7 @@ static int stream_flush(struct pastream_st *st)
 	if (!op)
 		return EINVAL;
 
-	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING)
+	while (c && pa_operation_get_state(op) == PA_OPERATION_RUNNING)
 		pa_threaded_mainloop_wait(c->mainloop);
 
 	pa_operation_unref(op);
@@ -62,6 +65,9 @@ static void pastream_destructor(void *arg)
 {
 	struct pastream_st *st = arg;
 	struct paconn_st *c = paconn_get();
+
+	if (!c)
+		return;
 
 	pa_threaded_mainloop_lock(c->mainloop);
 	st->shutdown = true;
@@ -126,7 +132,8 @@ static void stream_state_cb(pa_stream *s, void *arg)
 	(void)s;
 	(void)arg;
 
-	pa_threaded_mainloop_signal(c->mainloop, 0);
+	if (c)
+		pa_threaded_mainloop_signal(c->mainloop, 0);
 }
 
 
@@ -143,6 +150,9 @@ int pastream_start(struct pastream_st* st, void *arg)
 	struct paconn_st *c = paconn_get();
 	int pa_err = 0;
 	int err = 0;
+
+	if (!c)
+		return EINVAL;
 
 	pa_threaded_mainloop_lock(c->mainloop);
 	if (!c->context ||
@@ -170,10 +180,14 @@ int pastream_start(struct pastream_st* st, void *arg)
 					stream_overflow_cb, st);
 	pa_stream_set_state_callback(st->stream, stream_state_cb, st);
 
+	const char *device = NULL;
+	if (str_len(st->device) && str_casecmp(st->device, "default") != 0) {
+		device = st->device;
+	}
+
 	if (st->direction == PA_STREAM_PLAYBACK) {
 		pa_err = pa_stream_connect_playback(st->stream,
-				strlen(st->device) == 0 ? NULL :
-				st->device, &st->attr,
+				device, &st->attr,
 				PA_STREAM_INTERPOLATE_TIMING |
 				PA_STREAM_ADJUST_LATENCY |
 				PA_STREAM_AUTO_TIMING_UPDATE,
@@ -181,8 +195,7 @@ int pastream_start(struct pastream_st* st, void *arg)
 	}
 	else if (st->direction == PA_STREAM_RECORD) {
 		pa_err = pa_stream_connect_record(st->stream,
-				strlen(st->device) == 0 ? NULL :
-				st->device, &st->attr,
+				device, &st->attr,
 				PA_STREAM_INTERPOLATE_TIMING |
 				PA_STREAM_ADJUST_LATENCY |
 				PA_STREAM_AUTO_TIMING_UPDATE);
@@ -191,6 +204,7 @@ int pastream_start(struct pastream_st* st, void *arg)
 		warning("pulse: stream %s unsupported stream "
 			"direction %d\n",
 			st->sname, (int)st->direction);
+		err = EINVAL;
 	}
 
 out:
@@ -247,8 +261,8 @@ int pastream_alloc(struct pastream_st **bptr, const char *dev,
 
 	st->direction = dir;
 
-	strcpy(st->pname, pname);
-	strcpy(st->sname, sname);
+	str_ncpy(st->pname, pname, sizeof(st->pname));
+	str_ncpy(st->sname, sname, sizeof(st->sname));
 	str_ncpy(st->device, dev, sizeof(st->device));
 
 	*bptr = st;

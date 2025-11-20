@@ -1,5 +1,6 @@
 set(MODULES
   aac
+  aaudio
   account
   alsa
   amr
@@ -8,6 +9,7 @@ set(MODULES
   auconv
   audiounit
   aufile
+  augain
   auresamp
   ausine
   av1
@@ -25,11 +27,11 @@ set(MODULES
   directfb
   dshow
   dtls_srtp
-  ebuacip
   echo
   evdev
   fakevideo
   g711
+  libg722
   g722
   g7221
   g726
@@ -39,12 +41,12 @@ set(MODULES
   httpd
   httpreq
   ice
+  in_band_dtmf
   jack
   l16
   menu
   mixausrc
   mixminus
-  mpa
   mqtt
   mwi
   natpmp
@@ -78,10 +80,9 @@ set(MODULES
   vp8
   vp9
   vumeter
+  wasapi
   webrtc_aec
-  webrtc_aecm
   wincons
-  winwave
   x11
 
   CACHE STRING "List of modules like 'turn;pipewire;alsa'"

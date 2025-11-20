@@ -15,6 +15,7 @@ struct reg {
 	struct sipreg *sipreg;       /**< SIP Register client                */
 	int id;                      /**< Registration ID (for SIP outbound) */
 	int regint;                  /**< Registration interval              */
+	struct sa paddr;             /**< Peer Address                       */
 
 	/* status: */
 	uint16_t scode;              /**< Registration status code           */
@@ -106,10 +107,10 @@ static void register_handler(int err, const struct sip_msg *msg, void *arg)
 	const struct account *acc = ua_account(reg->ua);
 	const struct sip_hdr *hdr;
 	uint32_t prio = account_prio(acc);
-	enum ua_event evok =  reg->regint ?
-		UA_EVENT_REGISTER_OK : UA_EVENT_FALLBACK_OK;
-	enum ua_event evfail = reg->regint ?
-		UA_EVENT_REGISTER_FAIL : UA_EVENT_FALLBACK_FAIL;
+	enum bevent_ev evok =  reg->regint ?
+		BEVENT_REGISTER_OK : BEVENT_FALLBACK_OK;
+	enum bevent_ev evfail = reg->regint ?
+		BEVENT_REGISTER_FAIL : BEVENT_FALLBACK_FAIL;
 
 	if (err) {
 		if (reg->regint)
@@ -118,7 +119,7 @@ static void register_handler(int err, const struct sip_msg *msg, void *arg)
 
 		reg->scode = 999;
 
-		ua_event(reg->ua, evfail, NULL, "%m", err);
+		bevent_ua_emit(evfail, reg->ua, "%m", err);
 		return;
 	}
 
@@ -131,6 +132,8 @@ static void register_handler(int err, const struct sip_msg *msg, void *arg)
 	if (200 <= msg->scode && msg->scode <= 299) {
 
 		uint32_t n_bindings;
+
+		reg->paddr = msg->src;
 
 		n_bindings = sip_msg_hdr_count(msg, SIP_HDR_CONTACT);
 		reg->af    = sipmsg_af(msg);
@@ -159,8 +162,8 @@ static void register_handler(int err, const struct sip_msg *msg, void *arg)
 			}
 		}
 
-		ua_event(reg->ua, evok, NULL, "%u %r",
-			 msg->scode, &msg->reason);
+		bevent_ua_emit(evok, reg->ua,
+			       "%u %r", msg->scode, &msg->reason);
 	}
 	else if (msg->scode >= 300) {
 
@@ -169,8 +172,8 @@ static void register_handler(int err, const struct sip_msg *msg, void *arg)
 
 		reg->scode = msg->scode;
 
-		ua_event(reg->ua, evfail, NULL, "%u %r",
-			 msg->scode, &msg->reason);
+		bevent_ua_emit(evfail, reg->ua,
+			       "%u %r", msg->scode, &msg->reason);
 	}
 }
 
@@ -421,4 +424,10 @@ const struct sa *reg_laddr(const struct reg *reg)
 		return NULL;
 
 	return sipreg_laddr(reg->sipreg);
+}
+
+
+const struct sa *reg_paddr(const struct reg *reg)
+{
+	return reg ? &reg->paddr : NULL;
 }

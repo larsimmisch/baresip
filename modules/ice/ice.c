@@ -179,6 +179,9 @@ static void turnc_handler(int err, uint16_t scode, const char *reason,
 	struct ice_cand *lcand;
 	(void)msg;
 
+	if (m->terminated)
+		return;
+
 	--m->nstun;
 
 	/* TURN failed, so we destroy the client */
@@ -717,6 +720,9 @@ static void conncheck_handler(int err, bool update, void *arg)
 	struct mnat_sess *sess = m->sess;
 	bool sess_complete = false;
 
+	if (m->terminated)
+		return;
+
 	info("ice: %s: connectivity check is complete (update=%d)\n",
 	     sdp_media_name(m->sdpm), update);
 
@@ -798,7 +804,7 @@ static int ice_start(struct mnat_sess *sess)
 			m->complete = false;
 
 			/* start ice if we have remote candidates */
-			if (!list_isempty(icem_rcandl(m->icem))) {
+			if (icem_rcand_ready(m->icem)) {
 
 				err = icem_conncheck_start(m->icem);
 				if (err)

@@ -19,7 +19,7 @@ static void exit_handler(void *arg)
 {
 	(void)arg;
 
-	ua_event(NULL, UA_EVENT_EXIT, NULL, NULL);
+	bevent_app_emit(BEVENT_EXIT, NULL, NULL);
 
 	debug("ua: sip-stack exit\n");
 
@@ -185,6 +185,11 @@ static bool request_handler(const struct sip_msg *msg, void *arg)
 		return true;
 	}
 
+	if (!ua_req_check_origin(ua, msg)) {
+		(void)sip_treply(NULL, uag_sip(), msg, 403, "Forbidden");
+		return true;
+	}
+
 	if (!pl_strcmp(&msg->met, "OPTIONS")) {
 		ua_handle_options(ua, msg);
 		return true;
@@ -273,6 +278,7 @@ static int add_account_certs(void)
 static int uag_transp_add(const struct sa *laddr)
 {
 	struct sa local;
+	bool listen;
 #ifdef USE_TLS
 	const char *cert = NULL;
 	const char *cafile = NULL;
@@ -312,8 +318,11 @@ static int uag_transp_add(const struct sa *laddr)
 
 	if (u32mask_enabled(uag.transports, SIP_TRANSP_UDP))
 		err |= sip_transp_add(uag.sip, SIP_TRANSP_UDP, &local);
-	if (u32mask_enabled(uag.transports, SIP_TRANSP_TCP))
-		err |= sip_transp_add(uag.sip, SIP_TRANSP_TCP, &local);
+	if (u32mask_enabled(uag.transports, SIP_TRANSP_TCP)) {
+		listen = !u32mask_enabled(uag.cfg->reg_filt, SIP_TRANSP_TCP);
+		err |= sip_transp_add_sock(uag.sip, SIP_TRANSP_TCP, listen,
+					   &local);
+	}
 	if (err) {
 		warning("ua: SIP Transport failed: %m\n", err);
 		return err;
@@ -364,7 +373,9 @@ static int uag_transp_add(const struct sa *laddr)
 		if (sa_isset(&local, SA_PORT))
 			sa_set_port(&local, sa_port(&local) + 1);
 
-		err = sip_transp_add(uag.sip, SIP_TRANSP_TLS, &local, uag.tls);
+		listen = !u32mask_enabled(uag.cfg->reg_filt, SIP_TRANSP_TLS);
+		err = sip_transp_add_sock(uag.sip, SIP_TRANSP_TLS, listen,
+					  &local, uag.tls);
 		if (err) {
 			warning("ua: SIP/TLS transport failed: %m\n", err);
 			return err;
@@ -723,9 +734,9 @@ int uag_reset_transp(bool reg, bool reinvite)
 				if (!call_refresh_allowed(call)) {
 					call_hangup(call, 500, "Transport of "
 						    "User Agent changed");
-					ua_event(ua, UA_EVENT_CALL_CLOSED,
-						 call, "Transport of "
-						 "User Agent changed");
+					bevent_call_emit(BEVENT_CALL_CLOSED,
+							 call, "Transport of "
+							 "User Agent changed");
 					mem_deref(call);
 					continue;
 				}
@@ -893,8 +904,14 @@ struct ua *uag_find_msg(const struct sip_msg *msg)
 		return NULL;
 
 	cuser = &msg->uri.user;
+
+	/* match for registered accounts */
 	for (le = uag.ual.head; le; le = le->next) {
 		struct ua *ua = le->data;
+		struct account *acc = ua_account(ua);
+
+		if (!acc || !acc->regint)
+			continue;
 
 		if (0 == pl_strcasecmp(cuser, ua_local_cuser(ua))) {
 			ua_printf(ua, "selected for %r\n", cuser);
@@ -902,31 +919,31 @@ struct ua *uag_find_msg(const struct sip_msg *msg)
 		}
 	}
 
-	/* Try also matching by AOR, for better interop and for peer-to-peer
-	 * calls */
+	/* match for peer-to-peer calls (only un-registered accounts) */
 	for (le = uag.ual.head; le; le = le->next) {
 		struct ua *ua = le->data;
 		struct account *acc = ua_account(ua);
 
-		if (!acc->regint) {
-			if (!uri_match_transport(&acc->luri, NULL, msg->tp))
-				continue;
+		if (!acc || acc->regint)
+			continue;
 
-			if (!uri_match_af(&acc->luri, &msg->uri))
-				continue;
+		if (!uri_match_transport(&acc->luri, NULL, msg->tp))
+			continue;
 
-			if (!uaf && ua_catchall(ua))
-				uaf = ua;
-		}
+		if (!uri_match_af(&acc->luri, &msg->uri))
+			continue;
 
 		if (0 == pl_casecmp(cuser, &acc->luri.user)) {
 			ua_printf(ua, "account match for %r\n", cuser);
 			return ua;
 		}
+
+		if (!uaf && ua_catchall(ua))
+			uaf = ua;
 	}
 
 	if (uaf)
-		ua_printf(uaf, "selected\n");
+		ua_printf(uaf, "selected fallback\n");
 
 	return uaf;
 }
@@ -1222,28 +1239,6 @@ int uag_set_extra_params(const char *eprm)
 const char *uag_eprm(void)
 {
 	return uag.eprm;
-}
-
-
-/**
- * Set global Do not Disturb flag
- *
- * @param dnd DnD flag
- */
-void uag_set_dnd(bool dnd)
-{
-	uag.dnd = dnd;
-}
-
-
-/**
- * Get DnD status of uag
- *
- * @return True if DnD is active, False if not
- */
-bool uag_dnd(void)
-{
-	return uag.dnd;
 }
 
 

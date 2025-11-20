@@ -60,7 +60,7 @@ static void notify_handler(struct sip *sip, const struct sip_msg *msg,
 	struct mwi *mwi = arg;
 
 	if (mbuf_get_left(msg->mb)) {
-		ua_event(mwi->ua, UA_EVENT_MWI_NOTIFY, NULL, "%b",
+		bevent_ua_emit(BEVENT_MWI_NOTIFY, mwi->ua, "%b",
 			  mbuf_buf(msg->mb), mbuf_get_left(msg->mb));
 	}
 
@@ -141,21 +141,19 @@ static struct mwi *mwi_find(const struct ua *ua)
 }
 
 
-static void ua_event_handler(struct ua *ua, enum ua_event ev,
-			     struct call *call, const char *prm, void *arg)
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
+	struct ua *ua = bevent_get_ua(event);
 	const struct account *acc = ua_account(ua);
-	(void)call;
-	(void)prm;
 	(void)arg;
 
-	if (ev == UA_EVENT_REGISTER_OK) {
+	if (ev == BEVENT_REGISTER_OK) {
 
 		if (!mwi_find(ua) && account_mwi(acc))
 			mwi_subscribe(ua);
 	}
-	else if (ev == UA_EVENT_SHUTDOWN ||
-		 (ev == UA_EVENT_UNREGISTERING &&
+	else if (ev == BEVENT_SHUTDOWN ||
+		 (ev == BEVENT_UNREGISTERING &&
 		  str_cmp(account_sipnat(acc), "outbound") == 0)) {
 
 		struct mwi *mwi = mwi_find(ua);
@@ -195,13 +193,13 @@ static int module_init(void)
 	list_init(&mwil);
 	tmr_start(&tmr, 1, tmr_handler, 0);
 
-	return uag_event_register(ua_event_handler, NULL);
+	return bevent_register(event_handler, NULL);
 }
 
 
 static int module_close(void)
 {
-	uag_event_unregister(ua_event_handler);
+	bevent_unregister(event_handler);
 	tmr_cancel(&tmr);
 	list_flush(&mwil);
 

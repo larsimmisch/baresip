@@ -13,9 +13,10 @@ add_executable(${PROJECT_NAME}
   call.c
   cmd.c
   contact.c
-  event.c
+  bevent.c
   jbuf.c
-  menu.c
+  jbuf_gnack.c
+  dial_number.c
   message.c
   net.c
   play.c

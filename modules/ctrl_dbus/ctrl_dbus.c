@@ -200,7 +200,9 @@ on_handle_invoke(DBusBaresip *interface,
 	struct ctrl_st *st = arg;
 	int err;
 
-	str_dup(&st->command, command);
+	err = str_dup(&st->command, command);
+	if (err)
+		return false;
 
 	mtx_lock(&st->wait.mtx);
 	err = mqueue_push(st->mqueue, 0, NULL);
@@ -231,8 +233,7 @@ on_handle_invoke(DBusBaresip *interface,
 /*
  * Relay UA events
  */
-static void ua_event_handler(struct ua *ua, enum ua_event ev,
-			     struct call *call, const char *prm, void *arg)
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
 	struct ctrl_st *st = arg;
 	struct mbuf *buf;
@@ -240,7 +241,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 	struct odict *od = NULL;
 	int err = 0;
 	const char *class;
-	const char *etype = uag_event_str(ev);
+	const char *etype = bevent_str(ev);
 
 	if (!st->interface)
 		return;
@@ -252,7 +253,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 	pf.vph = print_handler;
 	pf.arg = buf;
-	err = event_encode_dict(od, ua, ev, call, prm);
+	err = odict_encode_bevent(od, event);
 	if (err)
 		goto out;
 
@@ -364,7 +365,11 @@ static int ctrl_alloc(struct ctrl_st **stp)
 	if (!st)
 		return ENOMEM;
 
-	mtx_init(&st->wait.mtx, mtx_plain);
+	err = mtx_init(&st->wait.mtx, mtx_plain) != thrd_success;
+	if (err) {
+		err = ENOMEM;
+		goto out;
+	}
 	cnd_init(&st->wait.cnd);
 
 	st->loop = g_main_loop_new(NULL, false);
@@ -459,7 +464,7 @@ static int ctrl_init(void)
 	if (err)
 		goto outerr;
 
-	err = uag_event_register(ua_event_handler, m_st);
+	err = bevent_register(event_handler, m_st);
 	if (err)
 		goto outerr;
 
@@ -495,7 +500,7 @@ outerr:
 
 static int ctrl_close(void)
 {
-	uag_event_unregister(ua_event_handler);
+	bevent_unregister(event_handler);
 	message_unlisten(baresip_message(), message_handler);
 	m_st = mem_deref(m_st);
 	return 0;

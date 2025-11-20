@@ -132,8 +132,8 @@ static int aurecv_alloc_aubuf(struct audio_recv *ar, const struct auframe *af)
 	int err;
 
 	sz = aufmt_sample_size(cfg->play_fmt);
-	min_sz = sz * calc_nsamp(af->srate, af->ch, cfg->buffer.min);
-	max_sz = sz * calc_nsamp(af->srate, af->ch, cfg->buffer.max);
+	min_sz = sz * au_calc_nsamp(af->srate, af->ch, cfg->buffer.min);
+	max_sz = sz * au_calc_nsamp(af->srate, af->ch, cfg->buffer.max);
 
 	debug("audio_recv: create audio buffer"
 	      " [%u - %u ms]"
@@ -144,14 +144,27 @@ static int aurecv_alloc_aubuf(struct audio_recv *ar, const struct auframe *af)
 	mtx_lock(ar->aubuf_mtx);
 	err = aubuf_alloc(&ar->aubuf, min_sz, max_sz);
 	if (err) {
-		warning("audio_recv: aubuf alloc error (%m)\n",
-			err);
+		warning("audio_recv: aubuf alloc error (%m)\n", err);
+		goto out;
 	}
+
+	struct pl *id = pl_alloc_str("aureceiver");
+	if (!id) {
+		ar->aubuf = mem_deref(ar->aubuf);
+		err = ENOMEM;
+		goto out;
+	}
+
+	aubuf_set_id(ar->aubuf, id);
+	mem_deref(id);
 
 	aubuf_set_mode(ar->aubuf, cfg->adaptive ?
 		       AUBUF_ADAPTIVE : AUBUF_FIXED);
 	aubuf_set_silence(ar->aubuf, cfg->silence);
+
+out:
 	mtx_unlock(ar->aubuf_mtx);
+
 	return err;
 }
 
@@ -207,13 +220,10 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 	bool marker = hdr->m;
 	int err = 0;
 	const struct aucodec *ac = ar->ac;
-	bool flush = ar->ssrc != hdr->ssrc;
 
 	/* No decoder set */
 	if (!ac)
 		return 0;
-
-	ar->ssrc = hdr->ssrc;
 
 	/* TODO: PLC */
 	if (lostc && ac->plch) {
@@ -222,7 +232,7 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 				   ar->fmt, ar->sampv, &sampc,
 				   mbuf_buf(mb), mbuf_get_left(mb));
 		if (err) {
-			warning("audio: %s codec decode %u bytes: %m\n",
+			warning("audio_recv: %s codec decode %zu bytes: %m\n",
 				ac->name, mbuf_get_left(mb), err);
 			goto out;
 		}
@@ -233,7 +243,7 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 				   ar->fmt, ar->sampv, &sampc,
 				   marker, mbuf_buf(mb), mbuf_get_left(mb));
 		if (err) {
-			warning("audio: %s codec decode %u bytes: %m\n",
+			warning("audio_recv: %s codec decode %zu bytes: %m\n",
 				ac->name, mbuf_get_left(mb), err);
 			goto out;
 		}
@@ -251,9 +261,6 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 		goto out;
 	}
 
-	if (flush)
-		aubuf_flush(ar->aubuf);
-
 	err = aurecv_process_decfilt(ar, &af);
 	if (err)
 		goto out;
@@ -264,20 +271,17 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 }
 
 
-/* RFC 5285 -- A General Mechanism for RTP Header Extensions */
-static const struct rtpext *rtpext_find(const struct rtpext *extv, size_t extc,
-					uint8_t id)
+void aurecv_reset(struct audio_recv *ar)
 {
-	for (size_t i=0; i<extc; i++) {
-		const struct rtpext *rtpext = &extv[i];
+	if (!ar)
+		return;
 
-		if (rtpext->id == id)
-			return rtpext;
-	}
-
-	return NULL;
+	mtx_lock(ar->mtx);
+	ar->ts_recv.is_set = false;
+	ar->ts_recv.num_wraps = 0;
+	aubuf_flush(ar->aubuf);
+	mtx_unlock(ar->mtx);
 }
-
 
 /* Handle incoming stream data from the network */
 void aurecv_receive(struct audio_recv *ar, const struct rtp_header *hdr,
@@ -318,7 +322,7 @@ void aurecv_receive(struct audio_recv *ar, const struct rtp_header *hdr,
 	switch (wrap) {
 
 	case -1:
-		warning("audio: rtp timestamp wraps backwards"
+		warning("audio_recv: rtp timestamp wraps backwards"
 			" (delta = %d) -- discard\n",
 			(int32_t)(ar->ts_recv.last - hdr->ts));
 		discard = true;
@@ -428,7 +432,7 @@ int aurecv_alloc(struct audio_recv **aupp, const struct config_audio *cfg,
 
 out:
 	if (err)
-		ar = mem_deref(ar);
+		mem_deref(ar);
 	else
 		*aupp = ar;
 
@@ -458,7 +462,7 @@ int aurecv_decoder_set(struct audio_recv *ar,
 	if (!ar || !ac)
 		return EINVAL;
 
-	info("audio: Set audio decoder: %s %uHz %dch\n",
+	info("audio_recv: Set audio decoder: %s %uHz %dch\n",
 	     ac->name, ac->srate, ac->ch);
 
 	mtx_lock(ar->mtx);
@@ -684,14 +688,15 @@ int aurecv_start_player(struct audio_recv *ar, struct list *auplayl)
 				   &prm, ar->device,
 				   auplay_write_handler, ar);
 		if (err) {
-			warning("audio: start_player failed (%s.%s): %m\n",
+			warning("audio_recv: start_player failed (%s.%s): "
+				"%m\n",
 				ar->module, ar->device, err);
 			goto out;
 		}
 
 		ar->ap = auplay_find(auplayl, ar->module);
 
-		info("audio: player started with sample format %s\n",
+		info("audio_recv: player started with sample format %s\n",
 		     aufmt_name(ar->play_fmt));
 	}
 
@@ -800,7 +805,7 @@ int aurecv_print_pipeline(struct re_printf *pf, const struct audio_recv *ar)
 
 	err = re_hprintf(pf, "audio rx pipeline:  %10s",
 			 ar->ap ? ar->ap->name : "(play)");
-	err = mbuf_printf(mb, " <--- aubuf");
+	err |= mbuf_printf(mb, " <--- aubuf");
 	mtx_lock(ar->mtx);
 	for (le = list_head(&ar->filtl); le; le = le->next) {
 		struct aufilt_dec_st *st = le->data;

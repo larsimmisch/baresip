@@ -9,17 +9,28 @@
 #include <rem.h>
 #include <baresip.h>
 #include "test.h"
+#include "sip/sipsrv.h"
 #include "../src/core.h"  /* NOTE: temp */
+
+
+#define DEBUG_MODULE "testcall"
+#define DEBUG_LEVEL 5
+#include <re_dbg.h>
 
 
 #define MAGIC 0x7004ca11
 
+enum {
+	IP_127_0_0_1 = 0x7f000001,
+};
 
 enum behaviour {
 	BEHAVIOUR_ANSWER = 0,
 	BEHAVIOUR_NOTHING,
 	BEHAVIOUR_REJECT,
+	BEHAVIOUR_REJECTF,
 	BEHAVIOUR_GET_HDRS,
+	BEHAVIOUR_PROGRESS,
 };
 
 enum action {
@@ -35,7 +46,7 @@ enum action {
 struct cancel_rule {
 	struct le le;
 
-	enum ua_event ev;
+	enum bevent_ev ev;
 	const char *prm;
 	struct ua *ua;
 	bool checkack;
@@ -51,6 +62,7 @@ struct cancel_rule {
 	unsigned n_auframe;
 	unsigned n_audebug;
 	unsigned n_rtcp;
+	unsigned n_closed;
 	double aulvl;
 
 	struct cancel_rule *cr_and;
@@ -63,6 +75,7 @@ struct agent {
 	struct agent *peer;
 	struct ua *ua;
 	uint16_t close_scode;
+	char *close_prm;
 	bool failed;
 
 	unsigned n_incoming;
@@ -99,6 +112,7 @@ struct fixture {
 	struct sa dst;
 	struct sa laddr_udp;
 	struct sa laddr_tcp;
+	struct sa laddr_tls;
 	enum behaviour behaviour;
 	enum action estab_action;
 	char buri[256];
@@ -121,7 +135,7 @@ struct fixture {
 	err = sa_set_str(&f->dst, "127.0.0.1", 5060);			\
 	TEST_ERR(err);							\
 									\
-	err = ua_init("test", true, true, false);			\
+	err = ua_init("test", true, true, true);			\
 	TEST_ERR(err);							\
 									\
 	f->magic = MAGIC;						\
@@ -142,7 +156,7 @@ struct fixture {
 	f->a.peer = &f->b;						\
 	f->b.peer = &f->a;						\
 									\
-	err = uag_event_register(event_handler, f);			\
+	err = bevent_register(event_handler, f);			\
 	TEST_ERR(err);							\
 									\
 	err = sip_transp_laddr(uag_sip(), &f->laddr_udp,		\
@@ -151,6 +165,10 @@ struct fixture {
 									\
 	err = sip_transp_laddr(uag_sip(), &f->laddr_tcp,		\
 			       SIP_TRANSP_TCP, &f->dst);		\
+	TEST_ERR(err);							\
+									\
+	err = sip_transp_laddr(uag_sip(), &f->laddr_tls,		\
+			       SIP_TRANSP_TLS, &f->dst);		\
 	TEST_ERR(err);							\
 									\
 	debug("test: local SIP transp: UDP=%J, TCP=%J\n",		\
@@ -176,10 +194,13 @@ struct fixture {
 	mem_deref(f->c.ua);			\
 	mem_deref(f->b.ua);			\
 	mem_deref(f->a.ua);			\
+	mem_deref(f->c.close_prm);		\
+	mem_deref(f->b.close_prm);		\
+	mem_deref(f->a.close_prm);		\
 						\
 	module_unload("g711");			\
 						\
-	uag_event_unregister(event_handler);	\
+	bevent_unregister(event_handler);	\
 						\
 	ua_stop_all(true);			\
 	ua_close();				\
@@ -201,7 +222,7 @@ static void cancel_rule_destructor(void *arg)
 }
 
 
-static struct cancel_rule *cancel_rule_alloc(enum ua_event ev,
+static struct cancel_rule *cancel_rule_alloc(enum bevent_ev ev,
 					     struct ua *ua,
 					     unsigned n_incoming,
 					     unsigned n_progress,
@@ -225,13 +246,14 @@ static struct cancel_rule *cancel_rule_alloc(enum ua_event ev,
 	r->n_auframe     = (unsigned) -1;
 	r->n_audebug     = (unsigned) -1;
 	r->n_rtcp        = (unsigned) -1;
+	r->n_closed      = (unsigned) -1;
 	r->aulvl         = 0.0f;
 	return r;
 }
 
 
 static struct cancel_rule *fixture_add_cancel_rule(struct fixture *f,
-						   enum ua_event ev,
+						   enum bevent_ev ev,
 						   struct ua *ua,
 						   unsigned n_incoming,
 						   unsigned n_progress,
@@ -248,7 +270,7 @@ static struct cancel_rule *fixture_add_cancel_rule(struct fixture *f,
 
 
 static struct cancel_rule *cancel_rule_and_alloc(struct cancel_rule *cr,
-						 enum ua_event ev,
+						 enum bevent_ev ev,
 						 struct ua *ua,
 						 unsigned n_incoming,
 						 unsigned n_progress,
@@ -278,7 +300,7 @@ static int cancel_rule_debug(struct re_printf *pf,
 	if (!cr)
 		return 0;
 
-	err  = re_hprintf(pf, "  --- %s ---\n", uag_event_str(cr->ev));
+	err  = re_hprintf(pf, "  --- %s ---\n", bevent_str(cr->ev));
 	err |= re_hprintf(pf, "    prm:  %s\n", cr->prm);
 	err |= re_hprintf(pf, "    ua:   %s\n",
 			  account_aor(ua_account(cr->ua)));
@@ -293,6 +315,7 @@ static int cancel_rule_debug(struct re_printf *pf,
 	err |= cr_debug_nbr(n_vidframe);
 	err |= cr_debug_nbr(n_audebug);
 	err |= cr_debug_nbr(n_rtcp);
+	err |= cr_debug_nbr(n_closed);
 	err |= re_hprintf(pf, "    met:  %s\n", cr->met ? "yes": "no");
 	if (err)
 		return err;
@@ -425,7 +448,7 @@ static void check_ack(void *arg)
 	ag->gotack = !call_ack_pending(ua_call(ag->ua));
 
 	if (ag->gotack)
-		ua_event(ag->ua, UA_EVENT_CUSTOM, ua_call(ag->ua), "gotack");
+		bevent_ua_emit(BEVENT_CUSTOM, ag->ua, "gotack");
 
 	else
 		tmr_start(&ag->tmr_ack, 1, check_ack, ag);
@@ -442,7 +465,7 @@ static int agent_wait_for_ack(struct agent *ag, unsigned n_incoming,
 	if (!call_ack_pending(ua_call(ag->ua)))
 		return 0;
 
-	cancel_rule_new(UA_EVENT_CUSTOM, ag->ua, n_incoming, n_progress,
+	cancel_rule_new(BEVENT_CUSTOM, ag->ua, n_incoming, n_progress,
 			n_established);
 	cr->prm = "gotack";
 	cr->checkack = true;
@@ -462,7 +485,7 @@ out:
 
 
 static bool check_rule(struct cancel_rule *rule, int met_prev,
-		       struct agent *ag, enum ua_event ev, const char *prm)
+		       struct agent *ag, enum bevent_ev ev, const char *prm)
 {
 	bool met_next = true;
 	if (rule->cr_and) {
@@ -481,28 +504,28 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (str_isset(rule->prm) &&
 	    !str_str(prm, rule->prm)) {
 		info("test: event %s prm=[%s] (expected [%s])\n",
-		     uag_event_str(ev), prm, rule->prm);
+		     bevent_str(ev), prm, rule->prm);
 		return false;
 	}
 
 	if (rule->ua &&
 	    ag->ua != rule->ua) {
 		info("test: event %s ua=[%s] (expected [%s]\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     account_aor(ua_account(ag->ua)),
 		     account_aor(ua_account(rule->ua)));
 		return false;
 	}
 
 	if (rule->checkack && !ag->gotack) {
-		info("test: event %s waiting for ACK\n", uag_event_str(ev));
+		info("test: event %s waiting for ACK\n", bevent_str(ev));
 		return false;
 	}
 
 	if (UINTSET(rule->n_incoming) &&
 	    ag->n_incoming != rule->n_incoming) {
 		info("test: event %s n_incoming=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_incoming, rule->n_incoming);
 		return false;
 	}
@@ -510,7 +533,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_progress) &&
 	    ag->n_progress < rule->n_progress) {
 		info("test: event %s n_progress=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_progress, rule->n_progress);
 		return false;
 	}
@@ -518,7 +541,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_established) &&
 	    ag->n_established != rule->n_established) {
 		info("test: event %s n_established=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_established, rule->n_established);
 		return false;
 	}
@@ -526,7 +549,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_audio_estab) &&
 	    ag->n_audio_estab != rule->n_audio_estab) {
 		info("test: event %s n_audio_estab=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_audio_estab, rule->n_audio_estab);
 		return false;
 	}
@@ -534,7 +557,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_video_estab) &&
 	    ag->n_video_estab != rule->n_video_estab) {
 		info("test: event %s n_video_estab=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_video_estab, rule->n_video_estab);
 		return false;
 	}
@@ -542,7 +565,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_offer_cnt) &&
 	    ag->n_offer_cnt != rule->n_offer_cnt) {
 		info("test: event %s n_offer_cnt=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_offer_cnt, rule->n_offer_cnt);
 		return false;
 	}
@@ -550,7 +573,7 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	if (UINTSET(rule->n_answer_cnt) &&
 	    ag->n_answer_cnt != rule->n_answer_cnt) {
 		info("test: event %s n_answer_cnt=%u (expected %u)\n",
-		     uag_event_str(ev),
+		     bevent_str(ev),
 		     ag->n_answer_cnt, rule->n_answer_cnt);
 		return false;
 	}
@@ -571,6 +594,10 @@ static bool check_rule(struct cancel_rule *rule, int met_prev,
 	    ag->n_rtcp < rule->n_rtcp)
 		return false;
 
+	if (UINTSET(rule->n_closed) &&
+	    ag->n_closed < rule->n_closed)
+		return false;
+
 	if (rule->aulvl != 0.0f &&
 	    (ag->aulvl < rule->aulvl || ag->aulvl >= 0.0f))
 		return false;
@@ -588,7 +615,7 @@ out:
 }
 
 
-static void process_rules(struct agent *ag, enum ua_event ev, const char *prm)
+static void process_rules(struct agent *ag, enum bevent_ev ev, const char *prm)
 {
 	struct fixture *f = ag->fix;
 	struct le *le;
@@ -599,24 +626,43 @@ static void process_rules(struct agent *ag, enum ua_event ev, const char *prm)
 }
 
 
-static void event_handler(struct ua *ua, enum ua_event ev,
-			  struct call *call, const char *prm, void *arg)
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
 	struct fixture *f = arg;
 	struct call *call2 = NULL;
 	struct agent *ag;
 	struct stream *strm = NULL;
 	char curi[256];
+	const char    *prm  = bevent_get_text(event);
+	struct call   *call = bevent_get_call(event);
+	struct ua     *ua   = bevent_get_ua(event);
+	const struct sip_msg *msg  = bevent_get_msg(event);
 	int err = 0;
-	(void)prm;
 
 #if 1
 	info("test: [ %s ] event: %s (%s)\n",
-	     account_aor(ua_account(ua)), uag_event_str(ev), prm);
+	     account_aor(ua_account(ua)), bevent_str(ev), prm);
 #endif
 
 	ASSERT_TRUE(f != NULL);
 	ASSERT_EQ(MAGIC, f->magic);
+
+	if (ev == BEVENT_CREATE)
+		return;
+
+	if (!ua)
+		ua = uag_find_msg(msg);
+
+	if (ua && ev == BEVENT_SIPSESS_CONN) {
+		err = ua_accept(ua, msg);
+		if (err) {
+			warning("test: could not accept incoming call (%m)\n",
+				err);
+			return;
+		}
+
+		bevent_stop(event);
+	}
 
 	if (ua == f->a.ua)
 		ag = &f->a;
@@ -625,12 +671,17 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 	else if (ua == f->c.ua)
 		ag = &f->c;
 	else {
+		warning("test: could not find agent/ua\n");
 		return;
 	}
 
 	switch (ev) {
 
-	case UA_EVENT_CALL_INCOMING:
+	case BEVENT_CALL_REDIRECT:
+		ASSERT_STREQ("302,sip:c@127.0.0.1", prm);
+		break;
+
+	case BEVENT_CALL_INCOMING:
 		++ag->n_incoming;
 
 		switch (f->behaviour) {
@@ -649,6 +700,15 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 			ag->failed = true;
 			break;
 
+		case BEHAVIOUR_REJECTF:
+			ua_hangupf(ua, call, 302, "Moved Temporarily",
+				"Contact: <sip:c@127.0.0.1>;expires=5\r\n"
+				"Diversion: <sip:a@127.0.0.1>;reason=nop\r\n"
+				"Content-Length: 0\r\n\r\n");
+			call = NULL;
+			ag->failed = true;
+			break;
+
 		case BEHAVIOUR_GET_HDRS:
 			hdrs = call_get_custom_hdrs(call);
 			err = ua_answer(ua, call, VIDMODE_ON);
@@ -658,17 +718,25 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 			}
 			break;
 
+		case BEHAVIOUR_PROGRESS:
+			err = call_progress(call);
+			if (err) {
+				warning("call_progress failed (%m)\n", err);
+				goto out;
+			}
+			break;
+
 		default:
 			break;
 		}
 		break;
 
-	case UA_EVENT_CALL_PROGRESS:
+	case BEVENT_CALL_PROGRESS:
 		++ag->n_progress;
 
 		break;
 
-	case UA_EVENT_CALL_ESTABLISHED:
+	case BEVENT_CALL_ESTABLISHED:
 		++ag->n_established;
 
 		ASSERT_TRUE(str_isset(call_id(call)));
@@ -750,10 +818,12 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_CLOSED:
+	case BEVENT_CALL_CLOSED:
 		++ag->n_closed;
 
 		ag->close_scode = call_scode(call);
+		mem_deref(ag->close_prm);
+		str_dup(&ag->close_prm, prm);
 
 		if (ag->close_scode)
 			ag->failed = true;
@@ -765,7 +835,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_TRANSFER:
+	case BEVENT_CALL_TRANSFER:
 		++ag->n_transfer;
 
 		err = ua_call_alloc(&call2, ua, VIDMODE_ON, NULL, call,
@@ -789,7 +859,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_TRANSFER_FAILED:
+	case BEVENT_CALL_TRANSFER_FAILED:
 		++ag->n_transfer_fail;
 
 		call_hold(call, false);
@@ -798,7 +868,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_REMOTE_SDP:
+	case BEVENT_CALL_REMOTE_SDP:
 		if (!str_cmp(prm, "offer"))
 			++ag->n_offer_cnt;
 		else if (!str_cmp(prm, "answer"))
@@ -806,15 +876,15 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_HOLD:
+	case BEVENT_CALL_HOLD:
 		++ag->n_hold_cnt;
 		break;
 
-	case UA_EVENT_CALL_RESUME:
+	case BEVENT_CALL_RESUME:
 		++ag->n_resume_cnt;
 		break;
 
-	case UA_EVENT_CALL_MENC:
+	case BEVENT_CALL_MENC:
 		++ag->n_mediaenc;
 
 		if (strstr(prm, "audio"))
@@ -827,7 +897,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_DTMF_START:
+	case BEVENT_CALL_DTMF_START:
 		ASSERT_EQ(1, str_len(prm));
 		ASSERT_EQ(dtmf_digits[ag->n_dtmf_recv], prm[0]);
 		++ag->n_dtmf_recv;
@@ -837,7 +907,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_RTPESTAB:
+	case BEVENT_CALL_RTPESTAB:
 		++ag->n_rtpestab;
 
 		if (strstr(prm, "audio"))
@@ -847,7 +917,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_RTCP:
+	case BEVENT_CALL_RTCP:
 		++ag->n_rtcp;
 
 		break;
@@ -872,7 +942,7 @@ static void event_handler(struct ua *ua, enum ua_event ev,
 }
 
 
-int test_call_answer(void)
+static int test_call_answer_priv(void)
 {
 	struct fixture fix, *f = &fix;
 	int err = 0;
@@ -901,19 +971,39 @@ int test_call_answer(void)
 
  out:
 	fixture_close(f);
-
 	return err;
 }
 
 
-int test_call_reject(void)
+int test_call_answer(void)
+{
+	int err;
+	conf_config()->call.accept = true;
+	err = test_call_answer_priv();
+	if (err) {
+		warning("call_accept true failed\n");
+		return err;
+	}
+
+	conf_config()->call.accept = false;
+	err = test_call_answer_priv();
+	if (err) {
+		warning("call_accept false failed\n");
+		return err;
+	}
+
+	return 0;
+}
+
+
+static int test_call_reject_priv(bool headers)
 {
 	struct fixture fix, *f = &fix;
 	int err = 0;
 
 	fixture_init(f);
 
-	f->behaviour = BEHAVIOUR_REJECT;
+	f->behaviour = headers ? BEHAVIOUR_REJECTF :  BEHAVIOUR_REJECT;
 
 	/* Make a call from A to B */
 	err = ua_connect(f->a.ua, 0, NULL, f->buri, VIDMODE_OFF);
@@ -931,9 +1021,185 @@ int test_call_reject(void)
 	ASSERT_EQ(1, fix.b.n_incoming);
 	ASSERT_EQ(0, fix.b.n_established);
 
+	ASSERT_EQ(headers ? 302 : 486, fix.a.close_scode);
+	ASSERT_STREQ(headers ? "302 Moved Temporarily" :
+			       "486 Busy Here", fix.a.close_prm);
+
  out:
 	fixture_close(f);
 
+	return err;
+}
+
+
+int test_call_reject(void)
+{
+	int err;
+	err = test_call_reject_priv(false);
+	if (err)
+		return err;
+
+	err = test_call_reject_priv(true);
+	return err;
+}
+
+
+static int test_call_immediate_cancel(void)
+{
+	struct fixture fix, *f = &fix;
+	struct cancel_rule *cr;
+	struct call *call;
+	int err = 0;
+
+	fixture_init(f);
+
+	f->behaviour = BEHAVIOUR_REJECT;
+
+	cancel_rule_new(BEVENT_CALL_CLOSED, f->a.ua, 0, 0, 0);
+	cr->n_closed = 1;
+
+	/* Make a call from A to B */
+	err = ua_connect(f->a.ua, &call, NULL, f->buri, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	ua_hangup(f->a.ua, call, 0, NULL);
+
+	/* run main-loop with timeout, wait for events */
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+
+ out:
+	if (err)
+		failure_debug(f, false);
+
+	fixture_close(f);
+
+	return err;
+}
+
+
+static int test_call_progress_cancel(void)
+{
+	struct fixture fix, *f = &fix;
+	struct cancel_rule *cr;
+	struct call *call;
+	int err = 0;
+
+	fixture_init(f);
+
+	f->behaviour = BEHAVIOUR_PROGRESS;
+
+	cancel_rule_new(BEVENT_CALL_PROGRESS, f->a.ua, 0, 0, 0);
+	cr->n_progress = 1;
+
+	/* Make a call from A to B */
+	err = ua_connect(f->a.ua, &call, NULL, f->buri, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	/* run main-loop with timeout, wait for events */
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ua_hangup(f->a.ua, call, 0, NULL);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(1, fix.a.n_progress);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+
+ out:
+	if (err)
+		failure_debug(f, false);
+
+	fixture_close(f);
+
+	return err;
+}
+
+
+static int test_call_answer_cancel(void)
+{
+	struct fixture fix, *f = &fix;
+	struct cancel_rule *cr;
+	struct call *call;
+	int err = 0;
+
+	fixture_init(f);
+
+	f->behaviour = BEHAVIOUR_PROGRESS;
+
+	cancel_rule_new(BEVENT_CALL_PROGRESS, f->a.ua, 0, 0, 0);
+	cr->n_progress = 1;
+
+	/* Make a call from A to B */
+	err = ua_connect(f->a.ua, &call, NULL, f->buri, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	/* run main-loop with timeout, wait for events */
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	err = ua_answer(f->b.ua, NULL, VIDMODE_ON);
+	TEST_ERR(err);
+
+	ua_hangup(f->a.ua, call, 0, NULL);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(1, fix.a.n_progress);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(1, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+
+ out:
+	if (err)
+		failure_debug(f, false);
+
+	fixture_close(f);
+
+	return err;
+}
+
+
+int test_call_cancel(void)
+{
+	int err;
+
+	err = test_call_immediate_cancel();
+	TEST_ERR(err);
+
+	err = test_call_progress_cancel();
+	TEST_ERR(err);
+
+	err = test_call_answer_cancel();
+	TEST_ERR(err);
+
+ out:
 	return err;
 }
 
@@ -1012,7 +1278,7 @@ int test_call_answer_hangup_b(void)
 
 int test_call_rtp_timeout(void)
 {
-#define RTP_TIMEOUT_MS 1
+	enum { RTP_TIMEOUT_MS = 1 };
 	struct fixture fix, *f = &fix;
 	struct call *call;
 	int err = 0;
@@ -1278,8 +1544,7 @@ static void mock_vidisp_handler(const struct vidframe *frame,
 
 	++ag->n_vidframe;
 	ua = ag->ua;
-	ua_event(ua, UA_EVENT_CUSTOM, ua_call(ua), "vidframe %u",
-		 ag->n_vidframe);
+	bevent_ua_emit(BEVENT_CUSTOM, ua, "vidframe %u", ag->n_vidframe);
 
  out:
 	if (err)
@@ -1298,10 +1563,10 @@ int test_call_video(void)
 	conf_config()->video.enc_fmt = VID_FMT_YUV420P;
 
 	fixture_init(f);
-	cancel_rule_new(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CUSTOM, f->b.ua, 1, 0, 1);
 	cr->prm = "vidframe";
 	cr->n_vidframe = 3;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->a.ua, 0, 0, 1);
+	cancel_rule_and(BEVENT_CUSTOM, f->a.ua, 0, 0, 1);
 	cr->prm = "vidframe";
 	cr->n_vidframe = 3;
 
@@ -1355,12 +1620,12 @@ int test_call_change_videodir(void)
 	conf_config()->video.enc_fmt = VID_FMT_YUV420P;
 
 	fixture_init_prm(f, ";answermode=early");
-	cr_prog = cancel_rule_new(UA_EVENT_CALL_PROGRESS, f->a.ua, 0, 1, 0);
+	cr_prog = cancel_rule_new(BEVENT_CALL_PROGRESS, f->a.ua, 0, 1, 0);
 
-	cr_vidb = cancel_rule_new(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 1);
+	cr_vidb = cancel_rule_new(BEVENT_CUSTOM, f->b.ua, 1, 0, 1);
 	cr_vidb->prm = "vidframe";
 	cr_vidb->n_vidframe = 3;
-	cr_vida = cancel_rule_and(UA_EVENT_CUSTOM, f->a.ua, 0, 1, 1);
+	cr_vida = cancel_rule_and(BEVENT_CUSTOM, f->a.ua, 0, 1, 1);
 	cr_vida->prm = "vidframe";
 	cr_vida->n_vidframe = 3;
 
@@ -1412,14 +1677,14 @@ int test_call_change_videodir(void)
 	ASSERT_EQ(SDP_SENDRECV, sdp_media_ldir(vm));
 	ASSERT_EQ(SDP_SENDRECV, sdp_media_rdir(vm));
 
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 1);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 1);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 1);
 	cr->prm = "answer";
 
 	/* Set video inactive */
-	cr_vida->ev = UA_EVENT_MAX;
-	cr_vidb->ev = UA_EVENT_MAX;
+	cr_vida->ev = BEVENT_MAX;
+	cr_vidb->ev = BEVENT_MAX;
 	err = call_set_video_dir(ua_call(f->a.ua), SDP_INACTIVE);
 	TEST_ERR(err);
 	err = re_main_timeout(10000);
@@ -1440,8 +1705,8 @@ int test_call_change_videodir(void)
 	/* Set video sendrecv */
 	f->a.n_vidframe = 0;
 	f->b.n_vidframe = 0;
-	cr_vida->ev = UA_EVENT_CUSTOM;
-	cr_vidb->ev = UA_EVENT_CUSTOM;
+	cr_vida->ev = BEVENT_CUSTOM;
+	cr_vidb->ev = BEVENT_CUSTOM;
 	err = call_set_video_dir(ua_call(f->a.ua), SDP_SENDRECV);
 	TEST_ERR(err);
 	err = re_main_timeout(10000);
@@ -1483,10 +1748,10 @@ int test_call_100rel_video(void)
 
 	fixture_init_prm(f, ";100rel=yes;answermode=early");
 
-	cancel_rule_new(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 0);
+	cancel_rule_new(BEVENT_CUSTOM, f->b.ua, 1, 0, 0);
 	cr->prm = "vidframe";
 	cr->n_vidframe = 3;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->a.ua, 0, 1, 0);
+	cancel_rule_and(BEVENT_CUSTOM, f->a.ua, 0, 1, 0);
 	cr->prm = "vidframe";
 	cr->n_vidframe = 3;
 	/* to enable video, we need one vidsrc and vidcodec */
@@ -1511,9 +1776,9 @@ int test_call_100rel_video(void)
 	TEST_ERR(fix.err);
 
 	/* switch off early video */
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 0);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 0);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 0);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 0);
 	cr->prm = "answer";
 
 	err = call_set_video_dir(ua_call(f->a.ua), SDP_INACTIVE);
@@ -1591,8 +1856,7 @@ static void auframe_handler(struct auframe *af, const char *dev, void *arg)
 	++ag->n_auframe;
 	(void)audio_level_get(call_audio(ua_call(ua)), &ag->aulvl);
 
-	ua_event(ua, UA_EVENT_CUSTOM, ua_call(ua), "auframe %u",
-		 ag->n_auframe);
+	bevent_ua_emit(BEVENT_CUSTOM, ua, "auframe %u", ag->n_auframe);
 
  out:
 	if (err)
@@ -1614,10 +1878,10 @@ int test_call_aulevel(void)
 		       ";regint=0;ptime=1;audio_player=mock-auplay,b");
 	TEST_ERR(err);
 
-	cancel_rule_new(UA_EVENT_CUSTOM, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CUSTOM, f->a.ua, 0, 0, 1);
 	cr->prm = "auframe";
 	cr->aulvl = -96.0f;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CUSTOM, f->b.ua, 1, 0, 1);
 	cr->prm = "auframe";
 	cr->aulvl = -96.0f;
 
@@ -1668,10 +1932,10 @@ static int test_100rel_audio_base(enum audio_mode txmode)
 	TEST_ERR(err);
 	conf_config()->audio.txmode = txmode;
 
-	cancel_rule_new(UA_EVENT_CUSTOM, f->b.ua, 1, -1, 0);
+	cancel_rule_new(BEVENT_CUSTOM, f->b.ua, 1, -1, 0);
 	cr->prm = "auframe";
 	cr->n_auframe = 3;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->a.ua, 0, 1, 0);
+	cancel_rule_and(BEVENT_CUSTOM, f->a.ua, 0, 1, 0);
 	cr->prm = "auframe";
 	cr->n_auframe = 3;
 
@@ -1694,9 +1958,9 @@ static int test_100rel_audio_base(enum audio_mode txmode)
 	TEST_ERR(fix.err);
 
 	/* switch off early audio */
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 1, -1, 0);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->b.ua, 1, -1, 0);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 0);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 1, 0);
 	cr->prm = "answer";
 
 	call_set_media_direction(ua_call(f->a.ua), SDP_INACTIVE, SDP_INACTIVE);
@@ -1771,7 +2035,7 @@ int test_call_progress(void)
 	int err = 0;
 
 	fixture_init_prm(f, ";answermode=early");
-	cancel_rule_new(UA_EVENT_CALL_PROGRESS, f->a.ua, 0, 1, 0);
+	cancel_rule_new(BEVENT_CALL_PROGRESS, f->a.ua, 0, 1, 0);
 
 	f->behaviour = BEHAVIOUR_NOTHING;
 
@@ -1827,10 +2091,10 @@ static int test_media_base(enum audio_mode txmode,
 	conf_config()->audio.dec_fmt = acfmt;
 	conf_config()->avt.rtp_stats = true;
 
-	cancel_rule_new(UA_EVENT_CUSTOM, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CUSTOM, f->a.ua, 0, 0, 1);
 	cr->prm = "auframe";
 	cr->n_auframe = 3;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CUSTOM, f->b.ua, 1, 0, 1);
 	cr->prm = "auframe";
 	cr->n_auframe = 3;
 
@@ -1943,8 +2207,8 @@ int test_call_mediaenc(void)
 
 	/* Enable a dummy media encryption protocol */
 	fixture_init_prm(f, ";mediaenc=srtp;ptime=1");
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
 
 	ASSERT_STREQ("srtp", account_mediaenc(ua_account(f->a.ua)));
 
@@ -2003,8 +2267,8 @@ int test_call_medianat(void)
 
 	/* Enable a dummy media NAT-traversal protocol */
 	fixture_init_prm(f, ";medianat=XNAT;ptime=1");
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
 
 	ASSERT_STREQ("XNAT", account_medianat(ua_account(f->a.ua)));
 
@@ -2380,8 +2644,7 @@ static void delayed_audio_debug(void *arg)
 
 	++ag->n_audebug;
 
-	ua_event(ag->ua, UA_EVENT_CUSTOM, ua_call(ag->ua), "audebug %u",
-		 ag->n_audebug);
+	bevent_ua_emit(BEVENT_CUSTOM, ag->ua,  "audebug %u", ag->n_audebug);
 
 	tmr_start(&ag->tmr, 2, delayed_audio_debug, ag);
 out:
@@ -2408,16 +2671,16 @@ static int test_call_rtcp_base(bool rtcp_mux)
 	}
 
 	conf_config()->avt.rtp_stats = true;
-	cancel_rule_new(UA_EVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
 
-	cancel_rule_new(UA_EVENT_CALL_RTCP, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTCP, f->b.ua, 1, 0, 1);
 	cr->n_rtcp = 5;
-	cancel_rule_and(UA_EVENT_CALL_RTCP, f->a.ua, 0, 0, -1);
+	cancel_rule_and(BEVENT_CALL_RTCP, f->a.ua, 0, 0, -1);
 	cr->n_rtcp = 5;
-	cancel_rule_and(UA_EVENT_CUSTOM,    f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CUSTOM,    f->b.ua, 1, 0, 1);
 	cr->prm = "audebug";
 	cr->n_audebug = 5;
-	cancel_rule_and(UA_EVENT_CUSTOM,    f->a.ua, 0, 0, -1);
+	cancel_rule_and(BEVENT_CUSTOM,    f->a.ua, 0, 0, -1);
 	cr->prm = "audebug";
 	cr->n_audebug = 5;
 
@@ -2478,6 +2741,9 @@ int test_call_webrtc(void)
 	struct sdp_media *sdp_a, *sdp_b;
 	int err;
 
+	if (conf_config()->avt.rxmode == RECEIVE_MODE_THREAD)
+		return 0;
+
 	conf_config()->avt.rtcp_mux = true;
 
 	mock_mnat_register(baresip_mnatl());
@@ -2493,10 +2759,10 @@ int test_call_webrtc(void)
 	err = module_load(".", "fakevideo");
 	TEST_ERR(err);
 
-	fixture_init_prm(f, ";medianat=XNAT;mediaenc=dtls_srtp");
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
+	fixture_init_prm(f, ";medianat=XNAT;mediaenc=dtls_srtp;rtcp_mux=yes");
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
 	cr->n_audio_estab = cr->n_video_estab = 1;
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
 	cr->n_audio_estab = cr->n_video_estab = 1;
 
 	f->estab_action = ACTION_NOTHING;
@@ -2607,8 +2873,10 @@ static int test_call_bundle_base(bool use_mnat, bool use_menc)
 		fixture_init_prm(f, "");
 	}
 
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, -1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, -1);
+	cancel_rule_and(BEVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CALL_ESTABLISHED, f->a.ua, 0, 0, 1);
 
 	f->estab_action = ACTION_NOTHING;
 	f->behaviour = BEHAVIOUR_ANSWER;
@@ -2621,6 +2889,8 @@ static int test_call_bundle_base(bool use_mnat, bool use_menc)
 	err = re_main_timeout(15000);
 	TEST_ERR(err);
 	TEST_ERR(fix.err);
+	ASSERT_EQ(1, fix.a.n_established);
+	ASSERT_EQ(1, fix.b.n_established);
 
 	callv[0] = ua_call(f->a.ua);
 	callv[1] = ua_call(f->b.ua);
@@ -2706,6 +2976,13 @@ static int test_call_bundle_base(bool use_mnat, bool use_menc)
 	if (fix.err)
 		return fix.err;
 
+	if (err) {
+		warning("test: call bundle test failed with mnat=%s menc=%s "
+			"(%m)\n",
+			use_mnat ? "on" : "off",
+			use_menc ? "on" : "off", err);
+	}
+
 	return err;
 }
 
@@ -2725,11 +3002,19 @@ int test_call_bundle(void)
 	if (conf_config()->avt.rxmode == RECEIVE_MODE_THREAD)
 		return 0;
 
-	err |= test_call_bundle_base(false, false);
-	err |= test_call_bundle_base(true,  false);
-	err |= test_call_bundle_base(false, true);
-	err |= test_call_bundle_base(true,  true);
+	err = test_call_bundle_base(false, false);
+	TEST_ERR(err);
 
+	err = test_call_bundle_base(true,  false);
+	TEST_ERR(err);
+
+	err = test_call_bundle_base(false, true);
+	TEST_ERR(err);
+
+	err = test_call_bundle_base(true,  true);
+	TEST_ERR(err);
+
+ out:
 	return err;
 }
 
@@ -2782,8 +3067,8 @@ int test_call_ipv6ll(void)
 	err  = ua_alloc(&f->a.ua, "A <sip:a@kitchen>;regint=0");
 	err |= ua_alloc(&f->b.ua, "B <sip:b@office>;regint=0");
 
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
 
 	err |= ua_connect(f->a.ua, 0, NULL, uri, VIDMODE_OFF);
 	TEST_ERR(err);
@@ -2828,9 +3113,9 @@ static int test_call_hold_resume_base(bool tcp)
 
 
 	fixture_init(f);
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->a.ua, 0, 0, 1);
 	cr->n_audio_estab = 1;
-	cancel_rule_and(UA_EVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CALL_RTPESTAB, f->b.ua, 1, 0, 1);
 	cr->n_audio_estab = 1;
 
 	err = module_load(".", "ausine");
@@ -2864,9 +3149,9 @@ static int test_call_hold_resume_base(bool tcp)
 	ASSERT_EQ(SDP_SENDRECV, sdp_media_ldir(m));
 	ASSERT_EQ(SDP_SENDRECV, sdp_media_rdir(m));
 
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->b.ua, 1, 0, 1);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 1);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 1);
 	cr->prm = "answer";
 
 	/* set call on-hold */
@@ -2914,7 +3199,7 @@ static int test_call_hold_resume_base(bool tcp)
 	ASSERT_TRUE(!call_ack_pending(ua_call(f->b.ua)));
 
 	/* Hang up */
-	cancel_rule_new(UA_EVENT_CALL_CLOSED, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_CLOSED, f->b.ua, 1, 0, 1);
 	call_hangup(ua_call(f->a.ua), 0, NULL);
 	tmr_start(&f->b.tmr_ack, 1, check_ack, &f->b);
 	err = re_main_timeout(10000);
@@ -2923,7 +3208,7 @@ static int test_call_hold_resume_base(bool tcp)
 
 	/* New call from A -> B with sendonly offered */
 	list_flush(&f->rules);
-	cancel_rule_new(UA_EVENT_CALL_RTPESTAB, f->b.ua, 2, 0, 2);
+	cancel_rule_new(BEVENT_CALL_RTPESTAB, f->b.ua, 2, 0, 2);
 	cr->n_audio_estab = 2;
 
 	/* Make a call from A to B  */
@@ -2948,9 +3233,9 @@ static int test_call_hold_resume_base(bool tcp)
 	ASSERT_EQ(SDP_SENDRECV, sdp_media_ldir(m));
 	ASSERT_EQ(SDP_RECVONLY, sdp_media_rdir(m));
 
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 2, 0, 2);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->b.ua, 2, 0, 2);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 2);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 2);
 	cr->prm = "answer";
 
 	/* set call on-hold from A */
@@ -3001,9 +3286,9 @@ static int test_call_hold_resume_base(bool tcp)
 
 	/* New cancel rules for hold from B */
 	list_flush(&f->rules);
-	cancel_rule_new(UA_EVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 2);
+	cancel_rule_new(BEVENT_CALL_REMOTE_SDP, f->a.ua, 0, 0, 2);
 	cr->prm = "offer";
-	cancel_rule_and(UA_EVENT_CALL_REMOTE_SDP, f->b.ua, 2, 0, 2);
+	cancel_rule_and(BEVENT_CALL_REMOTE_SDP, f->b.ua, 2, 0, 2);
 	cr->prm = "answer";
 
 	/* set call on-hold from B */
@@ -3149,8 +3434,8 @@ int test_call_srtp_tx_rekey(void)
 	f->estab_action = ACTION_NOTHING;
 
 	/* call established cancel rule */
-	cancel_rule_new(UA_EVENT_CALL_ESTABLISHED, f->a.ua, 0, 0, 1);
-	cancel_rule_and(UA_EVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
+	cancel_rule_new(BEVENT_CALL_ESTABLISHED, f->a.ua, 0, 0, 1);
+	cancel_rule_and(BEVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
 
 	/* Call A to B */
 	err = ua_connect(f->a.ua, 0, NULL, f->buri, VIDMODE_ON);
@@ -3190,10 +3475,10 @@ int test_call_srtp_tx_rekey(void)
 	err |= call_modify(ua_call(f->a.ua));
 	TEST_ERR(err);
 
-	cancel_rule_new(UA_EVENT_CUSTOM, f->a.ua, 0, 0, 1);
+	cancel_rule_new(BEVENT_CUSTOM, f->a.ua, 0, 0, 1);
 	cr->prm = "auframe";
 	cr->n_auframe = 10;
-	cancel_rule_and(UA_EVENT_CUSTOM, f->b.ua, 1, 0, 1);
+	cancel_rule_and(BEVENT_CUSTOM, f->b.ua, 1, 0, 1);
 	cr->prm = "auframe";
 	cr->n_auframe = 10;
 
@@ -3248,6 +3533,440 @@ out:
 	b_rx_key_new = mem_deref(b_rx_key_new);
 	b_tx_key_new = mem_deref(b_tx_key_new);
 
+
+	return err;
+}
+
+
+#ifdef USE_TLS
+int test_call_sni(void)
+{
+	int err = 0;
+	struct fixture fix, *f = &fix;
+	struct dns_server *dns_srv = NULL;
+	struct dnsc *dnsc = NULL;
+	char buri_tls[256], curi_tls[256];
+	const char *dp = test_datapath();
+	char s[256];
+
+	/* warnings are expected for negative test cases, so silence them */
+	dbg_init(DBG_ERR, DBG_ANSI);
+
+	/* Set wrong global certificate. */
+	re_snprintf(conf_config()->sip.cert, sizeof(conf_config()->sip.cert),
+		    "%s/sni/other-cert.pem", dp);
+	conf_config()->sip.verify_server = true;
+
+	/* Setup Mocking DNS Server */
+	err = dns_server_alloc(&dns_srv, false);
+	err |= dns_server_add_a(dns_srv, "retest.server.org", IP_127_0_0_1);
+	err |= dns_server_add_a(dns_srv, "retest.unknown.org", IP_127_0_0_1);
+	err |= dnsc_alloc(&dnsc, NULL, &dns_srv->addr, 1);
+	err |= net_set_dnsc(baresip_network(), dnsc);
+	TEST_ERR(err);
+
+	fixture_init(f);
+
+	mem_deref(f->a.ua);
+	mem_deref(f->b.ua);
+
+	f->behaviour = BEHAVIOUR_ANSWER;
+
+	re_snprintf(s, sizeof(s), "A <sip:a@retest.client.org;transport=tls>"
+		    ";regint=0;cert=%s/sni/client-interm.pem", dp);
+	err = ua_alloc(&f->a.ua, s);
+	TEST_ERR(err);
+
+	re_snprintf(s, sizeof(s), "B <sip:b@retest.server.org;transport=tls>"
+		    ";regint=0;cert=%s/sni/server-interm.pem", dp);
+	err = ua_alloc(&f->b.ua, s);
+	TEST_ERR(err);
+
+	re_snprintf(s, sizeof(s), "C <sip:c@retest.unknown.org;"
+		    "transport=tls>;regint=0;cert=%s/sni/other-cert.pem", dp);
+	err = ua_alloc(&f->c.ua, s);
+	TEST_ERR(err);
+
+	re_snprintf(buri_tls, sizeof(buri_tls), "sip:b@retest.server.org:%u",
+		    sa_port(&f->laddr_tls));
+	re_snprintf(curi_tls, sizeof(curi_tls), "sip:c@retest.unknown.org:%u",
+		    sa_port(&f->laddr_tls));
+
+	/* 1st test. No CA set. Call from A to B. TLS handshake must fail. */
+	f->b.n_closed = 1;
+
+	err = ua_connect(f->a.ua, 0, NULL, buri_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+	ASSERT_EQ(0, fix.b.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+	/* 2nd test. CA set. Call from A to C. TLS handshake must fail because
+	 * certificate of C is selected which is from an unknown CA. */
+	re_snprintf(s, sizeof(s), "%s/sni/root-ca.pem", dp);
+	err = tls_add_cafile_path(uag_tls(), s, NULL);
+	TEST_ERR(err);
+
+	err = ua_connect(f->a.ua, 0, NULL, curi_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(2, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+	ASSERT_EQ(0, fix.b.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+	/* 3rd test. CA set. Call from A to B. TLS handshake must succeed.
+	* SNI chooses correct UA certificate even though global certificate
+	* is set. */
+	f->estab_action = ACTION_HANGUP_A;
+
+	err = ua_connect(f->a.ua, 0, NULL, buri_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(1, fix.a.n_established);
+	ASSERT_EQ(3, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(1, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+	ASSERT_EQ(0, fix.b.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+out:
+	if (err)
+		failure_debug(f, false);
+
+	mem_deref(dns_srv);
+
+	fixture_close(f);
+
+	dbg_init(DEBUG_LEVEL, DBG_ANSI);
+
+	return err;
+}
+
+
+int test_call_cert_select(void)
+{
+	int err = 0;
+	struct fixture fix, *f = &fix;
+	char auri_tls[256], buri_tls[256];
+	const char *dp = test_datapath();
+	char s[256];
+
+	/* warnings are expected for negative test cases, so silence them */
+	dbg_init(DBG_ERR, DBG_ANSI);
+
+	/* Set valid global certificate. */
+	re_snprintf(conf_config()->sip.cert, sizeof(conf_config()->sip.cert),
+		    "%s/sni/server-interm.pem", dp);
+	conf_config()->sip.verify_server = false;
+	conf_config()->sip.verify_client = true;
+
+	TEST_ERR(err);
+
+	fixture_init(f);
+
+	mem_deref(f->a.ua);
+	mem_deref(f->b.ua);
+
+	f->behaviour = BEHAVIOUR_ANSWER;
+
+	re_snprintf(s, sizeof(s), "A <sip:a@127.0.0.1;transport=tls>"
+		    ";regint=0;cert=%s/sni/client-interm.pem", dp);
+	err = ua_alloc(&f->a.ua, s);
+	TEST_ERR(err);
+
+	re_snprintf(s, sizeof(s), "B <sip:b@127.0.0.1;transport=tls>"
+		    ";regint=0;cert=%s/sni/other-cert.pem", dp);
+	err = ua_alloc(&f->b.ua, s);
+	TEST_ERR(err);
+
+	re_snprintf(auri_tls, sizeof(auri_tls), "sip:a@127.0.0.1:%u",
+		    sa_port(&f->laddr_tls));
+	re_snprintf(buri_tls, sizeof(buri_tls), "sip:b@127.0.0.1:%u",
+		    sa_port(&f->laddr_tls));
+
+	/* 1st test. No CA set. Call from A to B. TLS handshake must fail. */
+	f->b.n_closed = 1;
+
+	err = ua_connect(f->a.ua, 0, NULL, buri_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(1, fix.b.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+	/* 2nd test. CA set. Call from B to A. TLS handshake must fail because
+	 * B has invalid cert set. */
+	re_snprintf(s, sizeof(s), "%s/sni/root-ca.pem", dp);
+	err = tls_add_cafile_path(uag_tls(), s, NULL);
+	TEST_ERR(err);
+
+	err = ua_connect(f->b.ua, 0, NULL, auri_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.b.n_established);
+	ASSERT_EQ(2, fix.b.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+	/* 3rd test. CA set. Call from A to B. TLS handshake must succeed. */
+	f->estab_action = ACTION_HANGUP_A;
+
+	err = ua_connect(f->a.ua, 0, NULL, buri_tls, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(1, fix.a.n_established);
+	ASSERT_EQ(2, fix.a.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(1, fix.b.n_established);
+	ASSERT_EQ(2, fix.b.n_closed);
+	ASSERT_EQ(0, fix.a.close_scode);
+
+	ASSERT_EQ(0, fix.c.n_incoming);
+	ASSERT_EQ(0, fix.c.n_established);
+	ASSERT_EQ(0, fix.c.n_closed);
+	ASSERT_EQ(0, fix.c.close_scode);
+
+out:
+	if (err)
+		failure_debug(f, false);
+
+	fixture_close(f);
+
+	dbg_init(DEBUG_LEVEL, DBG_ANSI);
+
+	return err;
+}
+#endif
+
+
+static void sip_server_exit_handler(void *arg)
+{
+	(void)arg;
+	re_cancel();
+}
+
+
+static bool ua_cuser_has_suffix(const struct ua *ua)
+{
+	const char *cuser = ua_cuser(ua);
+	size_t len = str_len(cuser);
+	if (len < 16)
+		return false;
+
+	const struct account *acc = ua_account(ua);
+	const struct pl *user = &account_luri(acc)->user;
+	if (!user || !user->l)
+		return false;
+
+	return cuser[len - 16] == '-';
+}
+
+
+int test_call_uag_find_msg(void)
+{
+	struct fixture fix, *f = &fix;
+	struct sip_server *srv1 = NULL;
+	struct sip_server *srv2 = NULL;
+	struct sa sa1;
+	struct sa sa2;
+	char *aor=NULL;
+	char *curi=NULL;
+	struct cancel_rule *cr;
+	int err = 0;
+
+	fixture_init(f);
+
+	err = sip_server_alloc(&srv1, sip_server_exit_handler, NULL);
+	TEST_ERR(err);
+
+	err = sip_server_alloc(&srv2, sip_server_exit_handler, NULL);
+	TEST_ERR(err);
+
+	err = sip_transp_laddr(srv1->sip, &sa1, SIP_TRANSP_UDP, NULL);
+	TEST_ERR(err);
+
+	err = sip_transp_laddr(srv2->sip, &sa2, SIP_TRANSP_UDP, NULL);
+	TEST_ERR(err);
+
+	f->a.ua = mem_deref(f->a.ua);
+	f->b.ua = mem_deref(f->b.ua);
+	f->c.ua = mem_deref(f->c.ua);
+
+	err = re_sdprintf(&aor, "A <sip:alice@%J>;regint=60", &sa1);
+	TEST_ERR(err);
+	err = ua_alloc(&f->a.ua, aor);
+	TEST_ERR(err);
+	aor = mem_deref(aor);
+	err = re_sdprintf(&aor, "B <sip:alice@%J>;regint=60", &sa2);
+	TEST_ERR(err);
+	err = ua_alloc(&f->b.ua, aor);
+	TEST_ERR(err);
+	aor = mem_deref(aor);
+	err = re_sdprintf(&aor, "C <sip:bob@%J>;regint=60", &sa2);
+	TEST_ERR(err);
+	err = ua_alloc(&f->c.ua, aor);
+	TEST_ERR(err);
+	ASSERT_TRUE(!ua_cuser_has_suffix(f->a.ua));
+	ASSERT_TRUE(ua_cuser_has_suffix(f->b.ua));
+
+	err = ua_register(f->a.ua);
+	TEST_ERR(err);
+	err = ua_register(f->b.ua);
+	TEST_ERR(err);
+	err = ua_register(f->c.ua);
+	TEST_ERR(err);
+
+	cancel_rule_new(BEVENT_REGISTER_OK, f->a.ua, 0, 0, 0);
+	cancel_rule_and(BEVENT_REGISTER_OK, f->b.ua, 0, 0, 0);
+	cancel_rule_and(BEVENT_REGISTER_OK, f->c.ua, 0, 0, 0);
+	err = re_main_timeout(5000);
+	TEST_ERR(err);
+
+	cancel_rule_pop();
+
+	f->b.peer = &f->c;
+	f->c.peer = &f->b;
+
+	f->behaviour = BEHAVIOUR_ANSWER;
+	cancel_rule_new(BEVENT_CALL_ESTABLISHED, f->c.ua, 0, 0, 1);
+	cancel_rule_and(BEVENT_CALL_ESTABLISHED, f->b.ua, 1, 0, 1);
+
+	err = re_sdprintf(&curi, "sip:alice@%J", &sa2);
+	TEST_ERR(err);
+	err = ua_connect(f->c.ua, NULL, NULL, curi, VIDMODE_OFF);
+	TEST_ERR(err);
+
+	err = re_main_timeout(5000);
+	cancel_rule_pop();
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	/* verify that the right UA was selected and got established call */
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.a.n_established);
+	ASSERT_EQ(1, fix.b.n_incoming);
+	ASSERT_EQ(1, fix.b.n_established);
+
+	/* 2nd test: peer-to-peer call to registered UAs should be rejected */
+	f->a.ua = mem_deref(f->a.ua);
+	aor = mem_deref(aor);
+	err = re_sdprintf(&aor, "A <sip:alice@%J>;regint=60", &sa1);
+	TEST_ERR(err);
+	err = ua_alloc(&f->a.ua, aor);
+	TEST_ERR(err);
+	err = ua_register(f->a.ua);
+	TEST_ERR(err);
+	cancel_rule_new(BEVENT_REGISTER_OK, f->a.ua, 0, 0, 0);
+	err = re_main_timeout(5000);
+	cancel_rule_pop();
+	TEST_ERR(err);
+
+	curi = mem_deref(curi);
+	ASSERT_TRUE(ua_cuser_has_suffix(f->a.ua));
+	ASSERT_TRUE(ua_cuser_has_suffix(f->b.ua));
+	/* alice --> rejected. alice-<suffix> would be correct */
+	err = re_sdprintf(&curi, "sip:alice@%J", &f->laddr_udp);
+	TEST_ERR(err);
+
+	f->b.n_incoming = 0;
+	f->c.n_established = 0;
+	cancel_rule_new(BEVENT_CALL_CLOSED, f->c.ua, 0, 0, 0);
+	err = ua_connect(f->c.ua, NULL, NULL, curi, VIDMODE_OFF);
+	TEST_ERR(err);
+	err = re_main_timeout(5000);
+	cancel_rule_pop();
+	TEST_ERR(err);
+	TEST_ERR(fix.err);
+
+	ASSERT_EQ(0, fix.a.n_incoming);
+	ASSERT_EQ(0, fix.b.n_incoming);
+	ASSERT_EQ(0, fix.c.n_incoming);
+
+ out:
+	mem_deref(aor);
+	mem_deref(srv1);
+	mem_deref(srv2);
+	fixture_close(f);
+	mem_deref(curi);
 
 	return err;
 }

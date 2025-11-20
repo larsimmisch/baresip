@@ -186,17 +186,6 @@ static int dns_init(struct network *net)
 
 
 /**
- * Return TRUE if libre supports IPv6
- */
-static bool check_ipv6(void)
-{
-	struct sa sa;
-
-	return 0 == sa_set_str(&sa, "::1", 2000);
-}
-
-
-/**
  * Add a local IP address with given interface name
  *
  * @param net    Network instance
@@ -355,17 +344,6 @@ int net_alloc(struct network **netp, const struct config_net *cfg)
 
 	if (!netp || !cfg)
 		return EINVAL;
-
-	/*
-	 * baresip/libre must be built with matching HAVE_INET6 value.
-	 * if different the size of `struct sa' will not match and the
-	 * application is very likely to crash.
-	 */
-	if (!check_ipv6()) {
-		warning("libre was compiled without IPv6-support"
-			", but baresip was compiled with\n");
-		return EAFNOSUPPORT;
-	}
 
 	net = mem_zalloc(sizeof(*net), net_destructor);
 	if (!net)
@@ -766,6 +744,28 @@ struct dnsc *net_dnsc(const struct network *net)
 		return NULL;
 
 	return net->dnsc;
+}
+
+
+/**
+ * Set the DNS Client
+ *
+ * @param net  Network instance
+ * @param dnsc The DNS client
+ *
+ * @return 0 on success, otherwise errorcode
+ */
+int net_set_dnsc(struct network *net, struct dnsc *dnsc)
+{
+	if (!net)
+		return EINVAL;
+
+	if (net->dnsc)
+		mem_deref(net->dnsc);
+
+	net->dnsc = dnsc;
+
+	return 0;
 }
 
 

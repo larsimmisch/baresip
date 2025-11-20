@@ -37,6 +37,7 @@ static const struct test tests[] = {
 	TEST(test_call_multiple),
 	TEST(test_call_progress),
 	TEST(test_call_reject),
+	TEST(test_call_cancel),
 	TEST(test_call_rtcp),
 	TEST(test_call_rtp_timeout),
 	TEST(test_call_tcp),
@@ -53,18 +54,25 @@ static const struct test tests[] = {
 	TEST(test_call_100rel_video),
 	TEST(test_call_hold_resume),
 	TEST(test_call_srtp_tx_rekey),
+	TEST(test_call_uag_find_msg),
+#ifdef USE_TLS
+	TEST(test_call_sni),
+	TEST(test_call_cert_select),
+#endif
 	TEST(test_cmd),
 	TEST(test_cmd_long),
 	TEST(test_contact),
-	TEST(test_event),
+	TEST(test_bevent_register),
 	TEST(test_jbuf),
 	TEST(test_jbuf_adaptive),
-	TEST(test_jbuf_adaptive_video),
+	TEST(test_jbuf_video),
+	TEST(test_jbuf_gnack),
 	TEST(test_message),
 	TEST(test_network),
 	TEST(test_play),
 	TEST(test_stunuri),
 	TEST(test_ua_alloc),
+	TEST(test_ua_cuser),
 	TEST(test_ua_options),
 	TEST(test_ua_refer),
 	TEST(test_ua_register),
@@ -76,6 +84,25 @@ static const struct test tests[] = {
 	TEST(test_clean_number),
 	TEST(test_clean_number_only_numeric),
 };
+
+
+#ifdef DATA_PATH
+static char datapath[256] = DATA_PATH;
+#else
+static char datapath[256] = "./test/data";
+#endif
+
+
+void test_set_datapath(const char *path)
+{
+	str_ncpy(datapath, path, sizeof(datapath));
+}
+
+
+const char *test_datapath(void)
+{
+	return datapath;
+}
 
 
 static int run_one_test(const struct test *test)
@@ -231,6 +258,7 @@ static void usage(void)
 			 "\t-l               List all testcases and exit\n"
 			 "\t-r <rxmode>      RTP RX processing mode "
 			 "[main, thread]\n"
+			 "\t-d <path>        Path to data files\n"
 			 "\t-v               Verbose output (INFO level)\n"
 			 );
 }
@@ -261,11 +289,15 @@ int main(int argc, char *argv[])
 
 #ifdef HAVE_GETOPT
 	for (;;) {
-		const int c = getopt(argc, argv, "hlvr:");
+		const int c = getopt(argc, argv, "hlvr:d:");
 		if (0 > c)
 			break;
 
 		switch (c) {
+
+		case 'd':
+			test_set_datapath(optarg);
+			break;
 
 		case '?':
 		case 'h':
@@ -304,7 +336,7 @@ int main(int argc, char *argv[])
 #endif
 
 	re_printf("running baresip selftest version %s with %zu tests\n",
-		  BARESIP_VERSION, ntests);
+		  baresip_version(), ntests);
 
 	err = conf_configure_buf((uint8_t *)modconfig, str_len(modconfig));
 	if (err) {
@@ -320,7 +352,7 @@ int main(int argc, char *argv[])
 	}
 
 	err = baresip_init(config);
-	err = sa_set_str(&sa, "127.0.0.1", 0);
+	err |= sa_set_str(&sa, "127.0.0.1", 0);
 	err |= net_add_address(baresip_network(), &sa);
 	if (err)
 		goto out;

@@ -27,91 +27,75 @@
 static struct config core_config = {
 
 	/** SIP User-Agent */
-	{
-		"",
-		"",
-		"",
-		"",
-		"",
-		0,
-		SIP_TRANSP_UDP,
-		false,
-		false,
-		TLS_RESUMPTION_ALL,
-		0xa0,
+	.sip = {
+		.transp = SIP_TRANSP_UDP,
+		.tls_resume = TLS_RESUMPTION_ALL,
+		.tos = 0xa0,
 	},
 
-	/** Call config */
+	.call = /** Call config */
 	{
-		120,
-		4,
-		true
+		.local_timeout = 120,
+		.max_calls = 4,
+		.hold_other_calls = true,
+		.accept = false
 	},
 
 	/** Audio */
-	{
-		SHARE_PATH,
-		"","",
-		"","",
-		"","",
-		0,
-		0,
-		0,
-		0,
-		AUDIO_MODE_POLL,
-		false,
-		AUFMT_S16LE,
-		AUFMT_S16LE,
-		AUFMT_S16LE,
-		AUFMT_S16LE,
-		{20, 160},
-		false,
-		-35.0,
-		101
+	.audio = {
+		.audio_path = SHARE_PATH,
+		.txmode = AUDIO_MODE_POLL,
+		.level = false,
+		.src_fmt = AUFMT_S16LE,
+		.play_fmt = AUFMT_S16LE,
+		.enc_fmt = AUFMT_S16LE,
+		.dec_fmt = AUFMT_S16LE,
+		.buffer = {20, 160},
+		.adaptive = false,
+		.silence = -35.0,
+		.telev_pt = 101
 	},
 
 	/** Video */
-	{
-		"", "",
-		"", "",
-		640, 480,
-		1000000,
-		0,
-		0,
-		30,
-		true,
-		VID_FMT_YUV420P,
+	.video = {
+		.width = 640, .height = 480,
+		.bitrate = 1000000,
+		.send_bitrate = 0,
+		.burst_bits = 0,
+		.fps = 30,
+		.fullscreen = true,
+		.enc_fmt = VID_FMT_YUV420P,
 	},
 
 	/** Audio/Video Transport */
-	{
-		0xb8,
-		0x88,
-		{1024, 49152},
-		{0, 0},
-		false,
-		{
+	.avt = {
+		.rtp_tos = 0xb8,
+		.rtpv_tos = 0x88,
+		.rtp_ports = {1024, 49152},
+		.rtp_bw = {0, 0},
+		.rtcp_mux = false,
+		.audio = {
 			JBUF_FIXED,
-			{5, 10},
+			{100, 200},
+			50
 		},
-		{
+		.video = {
 			JBUF_FIXED,
-			{5, 50},
+			{100, 200},
+			250
 		},
-		false,
-		0,
-		false,
-		RECEIVE_MODE_MAIN,
+		.rtp_stats = false,
+		.rtp_timeout = 0,
+		.bundle = false,
+		.rxmode = RECEIVE_MODE_MAIN,
 	},
 
 	/* Network */
-	{
-		AF_UNSPEC,
-		"",
-		{ {"",0} },
-		0,
-		true,
-		false,
+	.net = {
+		.af = AF_UNSPEC,
+		.nsv = { {"",0} },
+		.use_linklocal = true,
+		.use_getaddrinfo = false,
 	},
 };
 
@@ -189,11 +173,7 @@ static enum aufmt resolve_aufmt(const struct pl *fmt)
 enum rtp_receive_mode resolve_receive_mode(const struct pl *fmt)
 {
 	if (0 == pl_strcasecmp(fmt, "main"))     return RECEIVE_MODE_MAIN;
-	if (0 == pl_strcasecmp(fmt, "thread")) {
-		warning("rtp_rxmode thread is currently "
-			"experimental\n");
-		return RECEIVE_MODE_THREAD;
-	}
+	if (0 == pl_strcasecmp(fmt, "thread"))   return RECEIVE_MODE_THREAD;
 
 	warning("rtp_rxmode %r is not supported\n", fmt);
 	return RECEIVE_MODE_MAIN;
@@ -280,8 +260,7 @@ static const char *jbuf_type_str(enum jbuf_type jbtype)
 }
 
 
-static void decode_sip_transports(struct config_sip *cfg,
-				      const struct pl *pl)
+static void decode_sip_transports(uint32_t *mask, const struct pl *pl)
 {
 	uint8_t i;
 
@@ -296,19 +275,19 @@ static void decode_sip_transports(struct config_sip *cfg,
 
 		en = 0 == re_regex(pl->p, pl->l, sip_transp_name(i)) &&
 		     0 != re_regex(pl->p, pl->l, buf, &e);
-		u32mask_enable(&cfg->transports, i, en);
+		u32mask_enable(mask, i, en);
 	}
 }
 
 
-static int sip_transports_print(struct re_printf *pf, uint32_t *mask)
+static int transp_print(struct re_printf *pf, uint32_t *mask, bool all)
 {
 	uint8_t i;
 	int err = 0;
 	bool first = true;
 
 	for (i = 0; i < SIP_TRANSPC; ++i) {
-		if (*mask==0 || u32mask_enabled(*mask, i)) {
+		if (u32mask_enabled(*mask, i) || (all && *mask == 0)) {
 			if (!first)
 				err = re_hprintf(pf, ",");
 
@@ -318,6 +297,18 @@ static int sip_transports_print(struct re_printf *pf, uint32_t *mask)
 	}
 
 	return err;
+}
+
+
+static int sip_transports_print(struct re_printf *pf, uint32_t *mask)
+{
+	return transp_print(pf, mask, true);
+}
+
+
+static int sip_transports_print_mask(struct re_printf *pf, uint32_t *mask)
+{
+	return transp_print(pf, mask, false);
 }
 
 
@@ -383,7 +374,7 @@ int config_parse_conf(struct config *cfg, const struct conf *conf)
 	(void)conf_get_str(conf, "sip_capath", cfg->sip.capath,
 			   sizeof(cfg->sip.capath));
 	if (0 == conf_get(conf, "sip_transports", &pl))
-		decode_sip_transports(&cfg->sip, &pl);
+		decode_sip_transports(&cfg->sip.transports, &pl);
 	if (!str_isset(cfg->sip.cafile) && !str_isset(cfg->sip.capath))
 		cfg->sip.verify_server = false;
 
@@ -413,6 +404,9 @@ int config_parse_conf(struct config *cfg, const struct conf *conf)
 	if (0 == conf_get_u32(conf, "sip_tos", &v))
 		cfg->sip.tos = v;
 
+	if (0 == conf_get(conf, "filter_registrar", &pl))
+		decode_sip_transports(&cfg->sip.reg_filt, &pl);
+
 	/* Call */
 	(void)conf_get_u32(conf, "call_local_timeout",
 			   &cfg->call.local_timeout);
@@ -420,6 +414,8 @@ int config_parse_conf(struct config *cfg, const struct conf *conf)
 			   &cfg->call.max_calls);
 	(void)conf_get_bool(conf, "call_hold_other_calls",
 			   &cfg->call.hold_other_calls);
+	(void)conf_get_bool(conf, "call_accept",
+			   &cfg->call.accept);
 
 	/* Audio */
 	(void)conf_get_str(conf, "audio_path", cfg->audio.audio_path,
@@ -506,30 +502,34 @@ int config_parse_conf(struct config *cfg, const struct conf *conf)
 		cfg->avt.rtp_bw.max *= 1000;
 	}
 
-	if (0 == conf_get(conf, "jitter_buffer_type", &jbtype)) {
-		cfg->avt.video.jbtype = conf_get_jbuf_type(&jbtype);
-		cfg->avt.audio.jbtype = conf_get_jbuf_type(&jbtype);
-		warning("config: jitter_buffer_* config is deprecated, use "
-			"audio_jitter_buffer_* and "
-			"video_jitter_buffer_* options\n");
+	if (0 == conf_get(conf, "audio_jitter_buffer_delay", &jbtype)) {
+		warning("config: audio_jitter_buffer_delay is deprecated, use "
+			"audio_jitter_buffer_ms and "
+			"audio_jitter_buffer_size\n");
 	}
-
-	(void)conf_get_range(conf, "jitter_buffer_delay",
-			     &cfg->avt.video.jbuf_del);
-	(void)conf_get_range(conf, "jitter_buffer_delay",
-			     &cfg->avt.audio.jbuf_del);
+	if (0 == conf_get(conf, "video_jitter_buffer_delay", &jbtype)) {
+		warning("config: video_jitter_buffer_delay is deprecated, use "
+			"video_jitter_buffer_ms and "
+			"video_jitter_buffer_size\n");
+	}
 
 	if (0 == conf_get(conf, "audio_jitter_buffer_type", &jbtype))
 		cfg->avt.audio.jbtype = conf_get_jbuf_type(&jbtype);
 
-	(void)conf_get_range(conf, "audio_jitter_buffer_delay",
+	(void)conf_get_range(conf, "audio_jitter_buffer_ms",
 			     &cfg->avt.audio.jbuf_del);
+
+	(void)conf_get_u32(conf, "audio_jitter_buffer_size",
+			   &cfg->avt.audio.jbuf_sz);
 
 	if (0 == conf_get(conf, "video_jitter_buffer_type", &jbtype))
 		cfg->avt.video.jbtype = conf_get_jbuf_type(&jbtype);
 
-	(void)conf_get_range(conf, "video_jitter_buffer_delay",
+	(void)conf_get_range(conf, "video_jitter_buffer_ms",
 			     &cfg->avt.video.jbuf_del);
+
+	(void)conf_get_u32(conf, "video_jitter_buffer_size",
+			   &cfg->avt.video.jbuf_sz);
 
 	(void)conf_get_bool(conf, "rtp_stats", &cfg->avt.rtp_stats);
 	(void)conf_get_u32(conf, "rtp_timeout", &cfg->avt.rtp_timeout);
@@ -593,11 +593,13 @@ int config_print(struct re_printf *pf, const struct config *cfg)
 			 "sip_verify_client\t\t\t%s\n"
 			 "sip_tls_resumption\t\t\t%s\n"
 			 "sip_tos\t%u\n"
+			 "filter_registrar\t%H\n"
 			 "\n"
 			 "# Call\n"
 			 "call_local_timeout\t%u\n"
 			 "call_max_calls\t\t%u\n"
 			 "call_hold_other_calls\t%s\n"
+			 "call_accept\t\t%s\n"
 			 "\n",
 			 cfg->sip.local, cfg->sip.cert, cfg->sip.cafile,
 			 cfg->sip.capath, sip_transports_print,
@@ -606,11 +608,13 @@ int config_print(struct re_printf *pf, const struct config *cfg)
 			 cfg->sip.verify_server ? "yes" : "no",
 			 cfg->sip.verify_client ? "yes" : "no",
 			 tls_resume_mode_str(cfg->sip.tls_resume),
-			 cfg->sip.tos,
+			 cfg->sip.tos, sip_transports_print_mask,
+			 &cfg->sip.reg_filt,
 
 			 cfg->call.local_timeout,
 			 cfg->call.max_calls,
-			 cfg->call.hold_other_calls ? "yes" : "no");
+			 cfg->call.hold_other_calls ? "yes" : "no",
+			 cfg->call.accept ? "yes" : "no");
 	if (err)
 		return err;
 
@@ -682,9 +686,11 @@ int config_print(struct re_printf *pf, const struct config *cfg)
 			 "rtp_ports\t\t%H\n"
 			 "rtp_bandwidth\t\t%H\n"
 			 "audio_jitter_buffer_type\t%s\n"
-			 "audio_jitter_buffer_delay\t%H\n"
+			 "audio_jitter_buffer_ms\t%H\n"
+			 "audio_jitter_buffer_size\t%u\n"
 			 "video_jitter_buffer_type\t%s\n"
-			 "video_jitter_buffer_delay\t%H\n"
+			 "video_jitter_buffer_ms\t%H\n"
+			 "video_jitter_buffer_size\t%u\n"
 			 "rtp_stats\t\t%s\n"
 			 "rtp_timeout\t\t%u # in seconds\n"
 			 "avt_bundle\t\t%s\n"
@@ -701,8 +707,10 @@ int config_print(struct re_printf *pf, const struct config *cfg)
 			 range_print, &cfg->avt.rtp_bw,
 			 jbuf_type_str(cfg->avt.audio.jbtype),
 			 range_print, &cfg->avt.audio.jbuf_del,
+			 cfg->avt.audio.jbuf_sz,
 			 jbuf_type_str(cfg->avt.video.jbtype),
 			 range_print, &cfg->avt.video.jbuf_del,
+			 cfg->avt.video.jbuf_sz,
 			 cfg->avt.rtp_stats ? "yes" : "no",
 			 cfg->avt.rtp_timeout,
 			 cfg->avt.bundle ? "yes" : "no",
@@ -758,7 +766,7 @@ static const char *default_audio_device(void)
 #elif defined (OPENBSD)
 	return "sndio,default";
 #elif defined (WIN32)
-	return "winwave,nil";
+	return "wasapi,default";
 #else
 	return "alsa,default";
 #endif
@@ -857,6 +865,7 @@ static int core_config_template(struct re_printf *pf, const struct config *cfg)
 			  "#sip_verify_client\tno\n"
 			  "#sip_tls_resumption\tall\n"
 			  "sip_tos\t\t\t160\n"
+			  "#filter_registrar\tudp,tcp,tls,ws,wss\n"
 			  "\n"
 			  ,
 			  have_cafile ? "" : "#",
@@ -869,6 +878,7 @@ static int core_config_template(struct re_printf *pf, const struct config *cfg)
 			  "call_local_timeout\t%u\n"
 			  "call_max_calls\t\t%u\n"
 			  "call_hold_other_calls\tyes\n"
+			  "call_accept\t\tno\n"
 			  "\n"
 			  ,
 			  cfg->call.local_timeout,
@@ -930,12 +940,14 @@ static int core_config_template(struct re_printf *pf, const struct config *cfg)
 			  "#rtp_bandwidth\t\t512-1024 # [kbit/s]\n"
 			  "audio_jitter_buffer_type\tfixed\t\t# off, fixed,"
 				" adaptive\n"
-			  "audio_jitter_buffer_delay\t%u-%u\t\t"
-					"# (min. frames)-(max. packets)\n"
+			  "audio_jitter_buffer_ms\t%u-%u\t\t"
+				"# Min. - Max. [ms]\n"
+			  "audio_jitter_buffer_size\t50\t\t# [packets]\n"
 			  "video_jitter_buffer_type\tfixed\t\t# off, fixed,"
 				" adaptive\n"
-			  "video_jitter_buffer_delay\t%u-%u\t\t"
-					"# (min. frames)-(max. packets)\n"
+			  "video_jitter_buffer_ms\t%u-%u\t\t"
+				"# Min. - Max. [ms]\n"
+			  "video_jitter_buffer_size\t250\t\t# [packets]\n"
 			  "rtp_stats\t\tno\n"
 			  "#rtp_timeout\t\t60\n"
 			  "#avt_bundle\t\tno\n"
@@ -1107,11 +1119,11 @@ int config_write_template(const char *file, const struct config *cfg)
 	(void)re_fprintf(f, "#module\t\t\t" "opus" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "amr" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "g7221" MOD_EXT "\n");
+	(void)re_fprintf(f, "#module\t\t\t" "libg722" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "g722" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "g726" MOD_EXT "\n");
 	(void)re_fprintf(f, "module\t\t\t" "g711" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "l16" MOD_EXT "\n");
-	(void)re_fprintf(f, "#module\t\t\t" "mpa" MOD_EXT "\n");
 	(void)re_fprintf(f, "#module\t\t\t" "codec2" MOD_EXT "\n");
 
 	(void)re_fprintf(f, "\n# Audio filter Modules (in encoding order)\n");
@@ -1139,7 +1151,7 @@ int config_write_template(const char *file, const struct config *cfg)
 #elif defined (OPENBSD)
 	(void)re_fprintf(f, "module\t\t\t" "sndio" MOD_EXT "\n");
 #elif defined (WIN32)
-	(void)re_fprintf(f, "module\t\t\t" "winwave" MOD_EXT "\n");
+	(void)re_fprintf(f, "module\t\t\t" "wasapi" MOD_EXT "\n");
 #else
 	if (!strncmp(default_audio_device(), "pipewire", 8)) {
 		(void)re_fprintf(f, "#module\t\t\t" "alsa" MOD_EXT "\n");
@@ -1306,6 +1318,7 @@ int config_write_template(const char *file, const struct config *cfg)
 			"#sip_autoanswer_method\trfc5373 "
 			"# {rfc5373,call-info,alert-info}\n"
 			"#ring_aufile\t\tring.wav\n"
+			"#hangup_aufile\t\tnone\n"
 			"#callwaiting_aufile\tcallwaiting.wav\n"
 			"#ringback_aufile\tringback.wav\n"
 			"#notfound_aufile\tnotfound.wav\n"
@@ -1315,11 +1328,15 @@ int config_write_template(const char *file, const struct config *cfg)
 			"#menu_max_earlyaudio\t32\n"
 			"#menu_max_earlyvideo_rx\t32\n"
 			"#menu_max_earlyvideo_tx\t32\n"
+			"#menu_message_tone\tyes\n"
 			);
 
 	(void)re_fprintf(f,
 			"\n# GTK\n"
-			"#gtk_clean_number\tno\n");
+			"#gtk_clean_number\tno\n"
+			"#gtk_use_status_icon\tyes\n"
+			"gtk_use_window\tyes\n"
+			);
 
 	(void)re_fprintf(f,
 			"\n# avcodec\n"

@@ -6,7 +6,7 @@ baresip README
 
 
 Baresip is a portable and modular SIP User-Agent with audio and video support.  
-Copyright (c) 2010 - 2024 Alfred E. Heggestad and Contributors  
+Copyright (c) 2010 - 2025 Alfred E. Heggestad and Contributors  
 Distributed under BSD license
 
 
@@ -77,18 +77,17 @@ Distributed under BSD license
   - G.722
   - G.726
   - L16
-  - MPA
   - Opus
 
 * Audio-drivers:
   - Advanced Linux Sound Architecture (ALSA) audio-driver
   - PulseAudio POSIX OSes audio-driver
-  - Android OpenSLES audio-driver
+  - Android AAudio and OpenSLES audio-driver
   - Gstreamer playbin input audio-driver
   - JACK Audio Connection Kit audio-driver
   - MacOSX/iOS coreaudio/audiounit audio-driver
   - Portaudio audio-driver
-  - Windows winwave audio-driver
+  - Windows WASAPI audio-driver
 
 * Video:
   - Support for H.264, H.265, VP8, VP9, AV1 Video
@@ -246,6 +245,7 @@ Patches can be sent via Github
 ## Modular Plugin Architecture:
 ```
 aac           Advanced Audio Coding (AAC) audio codec
+aaudio        Android AAudio driver
 account       Account loader
 alsa          ALSA audio driver
 amr           Adaptive Multi-Rate (AMR) audio codec
@@ -254,6 +254,7 @@ aubridge      Audio bridge module
 auconv        Audio sample format converter
 audiounit     AudioUnit audio driver for MacOSX/iOS
 aufile        Audio module for using a WAV-file as audio input
+augain        Module to adjust gain of audio source
 auresamp      Audio resampler
 ausine        Audio sine wave input module
 av1           AV1 video codec
@@ -271,7 +272,6 @@ debug_cmd     Debug commands
 directfb      DirectFB video display module
 dshow         Windows DirectShow video source
 dtls_srtp     DTLS-SRTP end-to-end encryption
-ebuacip       EBU ACIP (Audio Contribution over IP) Profile
 echo          Echo server module
 evdev         Linux input driver
 fakevideo     Fake video input/output driver
@@ -285,12 +285,12 @@ gzrtp         ZRTP module using GNU ZRTP C++ library
 httpd         HTTP webserver UI-module
 httpreq       HTTP request module
 ice           ICE protocol for NAT Traversal
+in_band_dtmf  In-band DTMF decoder
 jack          JACK Audio Connection Kit audio-driver
 l16           L16 audio codec
 menu          Interactive menu
 mixausrc      Mixes another audio source into audio stream
 mixminus      Mixes N-1 audio streams for conferencing
-mpa           MPA Speech and Audio Codec
 mqtt          MQTT (Message Queue Telemetry Transport) module
 mwi           Message Waiting Indication
 natpmp        NAT Port Mapping Protocol (NAT-PMP) module
@@ -323,17 +323,16 @@ vidinfo       Video info overlay module
 vp8           VP8 video codec
 vp9           VP9 video codec
 vumeter       Display audio levels in console
+wasapi        Windows Audio Session API (WASAPI) driver
 webrtc_aec    Acoustic Echo Cancellation (AEC) using WebRTC SDK
 webrtc_aecm   Acoustic Echo Cancellation (AEC) mobile using WebRTC SDK
 wincons       Console input driver for Windows
-winwave       Audio driver for Windows
 x11           X11 video output driver
 ```
 
 
 ## IETF RFC/I-Ds:
 
-* RFC 2250  RTP Payload Format for the mpa Speech and Audio Codec
 * RFC 3016  RTP Payload Format for MPEG-4 Audio/Visual Streams
 * RFC 3262  Reliability of Provisional Responses for SIP
 * RFC 3311  SIP UPDATE Method
@@ -383,16 +382,16 @@ x11           X11 video output driver
 * RFC 8843  Negotiating Media Multiplexing Using SDP
 
 * draft-ietf-payload-vp9-16
+* RTP Payload Format For AV1
 
 
 ## Supported platforms:
 
-* Android (6.0 or later)
-* Apple macOS (10.12+)
-* Apple iOS 9.0 or later
-* Linux (kernel 3.0 or later, and glibc 2.5.x or later)
-* OpenBSD
-* Windows 10 or later (mingw and VS2019)
+* Android (8.0 or later)
+* Apple MacOS 11 and later (Xcode 10 or later)
+* Apple iOS 10.0 or later
+* Linux (kernel 4.0 or later, and glibc 2.31 or later)
+* Windows 10 or later (mingw and VS2022)
 
 
 ### Supported versions of C Standard library
@@ -407,14 +406,13 @@ x11           X11 video output driver
 
 ### Supported compilers:
 
-* gcc 4.9 or later
-* MSVC 2019
-* clang 3.x or later
+* clang 9.x or later
+* gcc 9.x or later
+* MSVC 2022 or later
 
 
 ### Supported versions of OpenSSL
 
-* OpenSSL version 1.1.1
 * OpenSSL version 3.x.x
 * LibreSSL version 3.x
 

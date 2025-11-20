@@ -154,7 +154,8 @@ void log_enable_color(bool enable)
  * @param fmt   Formatted message
  * @param ap    Variable argument list
  */
-void vlog(enum log_level level, const char *fmt, va_list ap)
+static void vlog(bool safe, enum log_level level, const char *fmt,
+		 va_list ap)
 {
 	char buf[8192];
 	char *p = buf;
@@ -174,8 +175,14 @@ void vlog(enum log_level level, const char *fmt, va_list ap)
 		s -= n;
 	}
 
-	if (re_vsnprintf(p, s, fmt, ap) < 0)
-		return;
+	if (safe) {
+		if (re_vsnprintf_s(p, s, fmt, ap) < 0)
+			return;
+	}
+	else {
+		if (re_vsnprintf(p, s, fmt, ap) < 0)
+			return;
+	}
 
 	if (lg.enable_stdout) {
 
@@ -207,16 +214,17 @@ void vlog(enum log_level level, const char *fmt, va_list ap)
 /**
  * Print a message to the logging system
  *
+ * @param safe  True for safe formatted string, false for unsafe
  * @param level Log level
  * @param fmt   Formatted message
  * @param ...   Variable arguments
  */
-void loglv(enum log_level level, const char *fmt, ...)
+void _loglv(bool safe, enum log_level level, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	vlog(level, fmt, ap);
+	vlog(safe, level, fmt, ap);
 	va_end(ap);
 }
 
@@ -224,15 +232,16 @@ void loglv(enum log_level level, const char *fmt, ...)
 /**
  * Print a DEBUG message to the logging system
  *
+ * @param safe  True for safe formatted string, false for unsafe
  * @param fmt   Formatted message
  * @param ...   Variable arguments
  */
-void debug(const char *fmt, ...)
+void _debug(bool safe, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	vlog(LEVEL_DEBUG, fmt, ap);
+	vlog(safe, LEVEL_DEBUG, fmt, ap);
 	va_end(ap);
 }
 
@@ -240,15 +249,16 @@ void debug(const char *fmt, ...)
 /**
  * Print an INFO message to the logging system
  *
+ * @param safe  True for safe formatted string, false for unsafe
  * @param fmt   Formatted message
  * @param ...   Variable arguments
  */
-void info(const char *fmt, ...)
+void _info(bool safe, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	vlog(LEVEL_INFO, fmt, ap);
+	vlog(safe, LEVEL_INFO, fmt, ap);
 	va_end(ap);
 }
 
@@ -256,14 +266,15 @@ void info(const char *fmt, ...)
 /**
  * Print a WARNING message to the logging system
  *
+ * @param safe  True for safe formatted string, false for unsafe
  * @param fmt   Formatted message
  * @param ...   Variable arguments
  */
-void warning(const char *fmt, ...)
+void _warning(bool safe, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	vlog(LEVEL_WARN, fmt, ap);
+	vlog(safe, LEVEL_WARN, fmt, ap);
 	va_end(ap);
 }

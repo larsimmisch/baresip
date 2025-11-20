@@ -47,7 +47,7 @@ static int print_system_info(struct re_printf *pf, void *arg)
 	err |= re_hprintf(pf, " Machine:  %s/%s\n", sys_arch_get(),
 			  sys_os_get());
 	err |= re_hprintf(pf, " Version:  %s (libre v%s)\n",
-			  BARESIP_VERSION, sys_libre_version_get());
+			  baresip_version(), sys_libre_version_get());
 	err |= re_hprintf(pf, " Build:    %H\n", sys_build_get, NULL);
 	err |= re_hprintf(pf, " Kernel:   %H\n", sys_kernel_get, NULL);
 	err |= re_hprintf(pf, " Uptime:   %H\n", fmt_human_time, &uptime);
@@ -167,27 +167,11 @@ static int cmd_play_file(struct re_printf *pf, void *arg)
 }
 
 
-struct fileinfo_st {
-	struct ausrc_st *ausrc;
-	struct ausrc_prm prm;
-	struct tmr tmr;
-};
-
-
-static void fileinfo_destruct(void *arg)
+static void print_fileinfo(struct ausrc_prm *prm)
 {
-	struct fileinfo_st *st = arg;
+	double s  = ((float) prm->duration) / 1000;
 
-	tmr_cancel(&st->tmr);
-	mem_deref(st->ausrc);
-}
-
-
-static void print_fileinfo(struct fileinfo_st *st)
-{
-	double s  = ((float) st->prm.duration) / 1000;
-
-	if (st->prm.duration) {
+	if (prm->duration) {
 		info("debug_cmd: length = %1.3lf seconds\n", s);
 		module_event("debug_cmd", "aufileinfo", NULL, NULL,
 			 "length = %lf seconds", s);
@@ -222,7 +206,7 @@ static int cmd_aufileinfo(struct re_printf *pf, void *arg)
 	char *path;
 	char aumod[16];
 	const char *file = carg->prm;
-	struct fileinfo_st *st = NULL;
+	struct ausrc_prm prm;
 
 	if (!str_isset(file)) {
 		re_hprintf(pf, "fileplay: filename not specified\n");
@@ -247,25 +231,16 @@ static int cmd_aufileinfo(struct re_printf *pf, void *arg)
 			conf_config()->audio.audio_path, file) < 0)
 		return ENOMEM;
 
-	st = mem_zalloc(sizeof(*st), fileinfo_destruct);
-	if (!st) {
-		err = ENOMEM;
-		goto out;
-	}
-
-	err = ausrc_alloc(&st->ausrc, baresip_ausrcl(),
-			  aumod,
-			  &st->prm, path, NULL, NULL, st);
+	err = ausrc_info(baresip_ausrcl(), aumod, &prm, path);
 	if (err) {
-		warning("debug_cmd: %s - ausrc %s does not support empty read "
-			"handler or reading source %s failed. (%m)\n",
-				__func__, aumod, carg->prm, err);
+		warning("debug_cmd: %s - ausrc %s does not support info query "
+			"or reading source %s failed. (%m)\n",
+			__func__, aumod, carg->prm, err);
 		goto out;
 	}
 
-	print_fileinfo(st);
+	print_fileinfo(&prm);
 out:
-	mem_deref(st);
 
 	mem_deref(path);
 	return err;
@@ -276,6 +251,26 @@ static int cmd_sip_debug(struct re_printf *pf, void *unused)
 {
 	(void)unused;
 	return sip_debug(pf, uag_sip());
+}
+
+static int cmd_sip_trace(struct re_printf *pf, void *arg)
+{
+	struct cmd_arg *carg = arg;
+	const char *prm = carg->prm;
+
+	/* assume false since the trace state is not exposed from libre */
+	static bool enabled = false;
+
+	if (prm)
+		str_bool(&enabled, prm);
+	else
+		enabled = !enabled;
+
+	re_hprintf(pf, "debug_cmd: SIP trace is now %s\n",
+		enabled ? "enabled" : "disabled");
+	uag_enable_sip_trace(enabled);
+
+	return 0;
 }
 
 
@@ -341,6 +336,7 @@ static const struct cmd debugcmdv[] = {
 {"netstat",    'n',      0, "Network debug",          cmd_net_debug       },
 {"play",        0, CMD_PRM, "Play audio file",        cmd_play_file       },
 {"sipstat",    'i',      0, "SIP debug",              cmd_sip_debug       },
+{"siptrace",    0, CMD_PRM, "SIP trace",              cmd_sip_trace       },
 {"sysinfo",    's',      0, "System info",            print_system_info   },
 {"timers",      0,       0, "Timer debug",            tmr_status          },
 {"uastat",     'u',      0, "UA debug",               cmd_ua_debug        },

@@ -18,9 +18,7 @@ struct ausrc_st {
 	AudioUnit au_conv;
 	mtx_t mutex;
 	struct ausrc_prm prm;
-	int ch;
 	uint32_t sampsz;
-	int fmt;
 	double sampc_ratio;
 	AudioBufferList *abl;
 	ausrc_read_h *rh;
@@ -78,11 +76,11 @@ static OSStatus input_callback(void *inRefCon,
 	if (!rh)
 		return 0;
 
-	framesz = st->sampsz * st->ch;
+	framesz = st->sampsz * st->prm.ch;
 	st->abl = &abl_in;
 
 	abl_in.mNumberBuffers = 1;
-	abl_in.mBuffers[0].mNumberChannels = st->ch;
+	abl_in.mBuffers[0].mNumberChannels = st->prm.ch;
 	abl_in.mBuffers[0].mDataByteSize = inNumberFrames * (UInt32)framesz;
 
 	ret = init_data_write(st->buf, &abl_in.mBuffers[0].mData,
@@ -106,7 +104,7 @@ static OSStatus input_callback(void *inRefCon,
 		struct auframe af;
 		uint64_t ts;
 
-		err = get_nb_frames(st->buf, &nb_frames);
+		err = audiounit_get_nb_frames(st->buf, &nb_frames);
 		if (err)
 			return kAudioUnitErr_InvalidParameter;
 
@@ -117,7 +115,7 @@ static OSStatus input_callback(void *inRefCon,
 			return noErr;
 
 		abl_conv.mNumberBuffers = 1;
-		abl_conv.mBuffers[0].mNumberChannels = st->ch;
+		abl_conv.mBuffers[0].mNumberChannels = st->prm.ch;
 		abl_conv.mBuffers[0].mData = NULL;
 
 		ret = AudioUnitRender(st->au_conv,
@@ -161,7 +159,7 @@ static OSStatus convert_callback(void *inRefCon,
 	(void)inTimeStamp;
 	(void)inBusNumber;
 
-	framesz = st->sampsz * st->ch;
+	framesz = st->sampsz * st->prm.ch;
 	ret = init_data_read(st->buf, &ioData->mBuffers[0].mData,
 			     framesz, inNumberFrames);
 
@@ -218,18 +216,16 @@ int audiounit_recorder_alloc(struct ausrc_st **stp, const struct ausrc *as,
 
 	st->rh  = rh;
 	st->arg = arg;
-	st->ch  = prm->ch;
 
 	st->sampsz = (uint32_t)aufmt_sample_size(prm->fmt);
 	if (!st->sampsz) {
 		err = ENOTSUP;
 		goto out;
 	}
-	st->fmt = prm->fmt;
 	st->prm = *prm;
 
-	framesz = st->sampsz * st->ch;
-	err = conv_buf_alloc(&st->buf, framesz);
+	framesz = st->sampsz * prm->ch;
+	err = audiounit_conv_buf_alloc(&st->buf, framesz);
 	if (err)
 		goto out;
 

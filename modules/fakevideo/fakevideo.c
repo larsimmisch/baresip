@@ -3,8 +3,6 @@
  *
  * Copyright (C) 2010 Alfred E. Heggestad
  */
-#define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -20,7 +18,7 @@
  * Fake video source and display module
  *
  * This module can be used to generate fake video input frames, and to
- * send output video frames to a fake non-existant display.
+ * send output video frames to a fake non-existent display.
  *
  * Example config:
  \verbatim
@@ -51,7 +49,7 @@ static struct vidisp *vidisp;
 
 static void process_frame(struct vidsrc_st *st)
 {
-	st->ts += (VIDEO_TIMEBASE / st->fps);
+	st->ts += (uint64_t)(VIDEO_TIMEBASE / st->fps);
 
 	st->frameh(st->frame, st->ts, st->arg);
 }

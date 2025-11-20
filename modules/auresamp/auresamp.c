@@ -92,7 +92,7 @@ static int sampv_alloc(struct auresamp_st *st, struct auframe *af)
 
 static int rsampv_check_size(struct auresamp_st *st, struct auframe *af)
 {
-	uint64_t ptime;
+	size_t ptime;
 	size_t psize;
 
 	ptime = af->sampc * 1000 / af->srate;
@@ -280,9 +280,11 @@ static int decode(struct aufilt_dec_st *aufilt_dec_st, struct auframe *af)
 }
 
 
-static struct aufilt resample = {
-	LE_INIT, "auresamp", encode_update, encode, decode_update, decode
-};
+static struct aufilt resample = {.name	  = "auresamp",
+				 .encupdh = encode_update,
+				 .ench	  = encode,
+				 .decupdh = decode_update,
+				 .dech	  = decode};
 
 
 static int module_init(void)

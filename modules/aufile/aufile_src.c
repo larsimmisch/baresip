@@ -3,8 +3,6 @@
  *
  * Copyright (C) 2022 commend.com - Christian Spielberger
  */
-#define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
 #include <re_atomic.h>
 #include <re.h>
 #include <rem.h>
@@ -197,7 +195,7 @@ int aufile_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	struct aufile_prm fprm;
 	int err;
 
-	if (!stp || !as || !prm  || !prm->ptime)
+	if (!stp || !as || !prm)
 		return EINVAL;
 
 	if (prm->fmt != AUFMT_S16LE) {
@@ -216,6 +214,8 @@ int aufile_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	st->errh  = errh;
 	st->arg   = arg;
 	st->ptime = prm->ptime;
+	if (!st->ptime)
+		st->ptime = 20;
 
 	err = aufile_open(&st->aufile, &fprm, dev, AUFILE_READ);
 	if (err) {
@@ -229,12 +229,9 @@ int aufile_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	/* return wav format to caller */
 	prm->srate = fprm.srate;
 	prm->ch    = fprm.channels;
-	prm->duration = aufile_get_length(st->aufile, &fprm);
 
-	if (!rh) {
-		mem_deref(st);
-		return 0;
-	}
+	if (!rh)
+		goto out;
 
 	st->prm   = *prm;
 
@@ -269,5 +266,32 @@ int aufile_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	else
 		*stp = st;
 
+	return err;
+}
+
+
+int aufile_info_handler(const struct ausrc *as,
+			struct ausrc_prm *prm, const char *dev)
+{
+	int err;
+	(void)as;
+
+	if (!prm || !str_isset(dev))
+		return EINVAL;
+
+	struct aufile *aufile;
+	struct aufile_prm fprm;
+	err = aufile_open(&aufile, &fprm, dev, AUFILE_READ);
+	if (err) {
+		warning("aufile: failed to open file '%s' (%m)\n", dev, err);
+		return err;
+	}
+
+	prm->srate    = fprm.srate;
+	prm->ch       = fprm.channels;
+	prm->fmt      = fprm.fmt;
+	prm->duration = aufile_get_length(aufile, &fprm);
+
+	mem_deref(aufile);
 	return err;
 }

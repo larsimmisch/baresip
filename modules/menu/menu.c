@@ -145,10 +145,14 @@ static void limit_earlymedia(struct call* call, void *arg)
 		update = true;
 	}
 
-	/* video */
-	if (!call_video(call))
-		return;
+	if (!call_video(call)) {
+		if (update)
+			call_update_media(call);
 
+		return;
+	}
+
+	/* video */
 	ldir = sdp_media_ldir(stream_sdpmedia(video_strm(call_video(call))));
 	ndir = ldir;
 
@@ -451,13 +455,13 @@ static void redial_handler(void *arg)
 	int err;
 	(void)arg;
 
-	info("now: redialing now. current_attempts=%u, max_attempts=%u\n",
+	info("menu: redialing now. current_attempts=%u, max_attempts=%u\n",
 	     menu.current_attempts,
 	     menu.redial_attempts);
 
 	if (menu.current_attempts > menu.redial_attempts) {
 
-		info("menu: redial: too many attemptes -- giving up\n");
+		info("menu: redial: too many attempts -- giving up\n");
 		return;
 	}
 
@@ -522,8 +526,8 @@ static int menu_autoanwser_call(struct call *call)
 	outgoing = menu_find_call(outgoing_call_test, call);
 	if (outgoing) {
 		call_hangup(outgoing, 0, NULL);
-		ua_event(call_get_ua(outgoing), UA_EVENT_CALL_CLOSED, outgoing,
-			 "Outgoing call cancelled due to auto answer");
+		bevent_call_emit(BEVENT_CALL_CLOSED, outgoing,
+				 "Outgoing call cancelled due to auto answer");
 		mem_deref(outgoing);
 	}
 
@@ -546,6 +550,9 @@ static void menu_play_closed(struct call *call)
 		fb = errorcode_fb_aufile(scode);
 
 		menu_play(call, key, fb, 1, DEVICE_ALERT);
+	}
+	else {
+		menu_play(call, "hangup_aufile", "none", 0, DEVICE_PLAYER);
 	}
 }
 
@@ -652,23 +659,56 @@ static void process_module_event(struct call *call, const char *prm)
 }
 
 
-static void ua_event_handler(struct ua *ua, enum ua_event ev,
-			     struct call *call, const char *prm, void *arg)
+static void apply_contact_mediadir(struct call *call)
+{
+	const char *peeruri = call_peeruri(call);
+	if (!peeruri)
+		return;
+
+	const struct contacts *contacts = baresip_contacts();
+	struct contact *con = contact_find(contacts, peeruri);
+	if (!con)
+		return;
+
+	enum sdp_dir caudir  = SDP_SENDRECV;
+	enum sdp_dir cviddir = SDP_SENDRECV;
+	contact_get_ldir(con, &caudir, &cviddir);
+
+	enum sdp_dir estaudir  = SDP_SENDRECV;
+	enum sdp_dir estviddir = SDP_SENDRECV;
+	call_get_media_estdir(call, &estaudir, &estviddir);
+
+	enum sdp_dir audir  = estaudir & caudir;
+	enum sdp_dir viddir = estviddir & cviddir;
+	if (audir == estaudir && viddir == estviddir)
+		return;
+
+	debug("menu: apply contact media direction audio=%s video=%s\n",
+	      sdp_dir_name(audir), sdp_dir_name(viddir));
+	call_set_media_direction(call, audir, viddir);
+}
+
+
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
 	struct call *call2 = NULL;
-	struct account *acc = ua_account(ua);
 	int32_t adelay = -1;
 	bool incall;
 	enum sdp_dir ardir, vrdir;
 	uint32_t count;
 	struct pl val;
 	char * uri;
+	const char           *prm  = bevent_get_text(event);
+	struct call          *call = bevent_get_call(event);
+	struct ua            *ua   = bevent_get_ua(event);
+	const struct sip_msg *msg  = bevent_get_msg(event);
+	struct account       *acc  = ua_account(bevent_get_ua(event));
 	int err;
 	(void)arg;
 
 #if 0
 	debug("menu: [ ua=%s call=%s ] event: %s (%s)\n",
-	      account_aor(acc), call_id(call), uag_event_str(ev), prm);
+	      account_aor(acc), call_id(call), bevent_str(ev), prm);
 #endif
 
 
@@ -678,8 +718,37 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 	switch (ev) {
 
-	case UA_EVENT_CALL_INCOMING:
+	case BEVENT_SIPSESS_CONN:
 
+		if (menu.dnd) {
+			const uint16_t scode = 480;
+			const char *reason = "Temporarily Unavailable";
+
+			(void)sip_treply(NULL, uag_sip(), msg, scode, reason);
+
+			info("menu: incoming call from %r <%r> rejected: "
+			     "%u %s\n",
+			     &msg->from.dname, &msg->from.auri, scode, reason);
+			bevent_sip_msg_emit(BEVENT_MODULE, msg,
+				"menu,rejected,%u %s", scode, reason);
+			bevent_stop(event);
+			break;
+		}
+
+		ua = uag_find_msg(msg);
+		err = ua_accept(ua, msg);
+		if (err) {
+			warning("menu: could not accept incoming call (%m)\n",
+				err);
+			return;
+		}
+
+		bevent_stop(event);
+		return;
+
+	case BEVENT_CALL_INCOMING:
+
+		apply_contact_mediadir(call);
 		if (call_state(call) != CALL_STATE_INCOMING)
 			return;
 
@@ -699,8 +768,8 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 		if (!call_has_video(call))
 			vrdir = SDP_INACTIVE;
 
-		info("%s: Incoming call from: %s %s - audio-video: %s-%s -"
-		     " (press 'a' to accept)\n",
+		info("menu: %s: Incoming call from: %s %s - audio-video: %s-%s"
+		     " - (press 'a' to accept)\n",
 		     account_aor(acc), call_peername(call), call_peeruri(call),
 		     sdp_dir_name(ardir), sdp_dir_name(vrdir));
 
@@ -719,44 +788,44 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_OUTGOING:
+	case BEVENT_CALL_OUTGOING:
+		apply_contact_mediadir(call);
 		++menu.outcnt;
 		break;
 
-	case UA_EVENT_CALL_LOCAL_SDP:
+	case BEVENT_CALL_LOCAL_SDP:
 		if (call_state(call) == CALL_STATE_OUTGOING)
 			menu_selcall(call);
 		break;
 
-	case UA_EVENT_CALL_RINGING:
+	case BEVENT_CALL_RINGING:
 		menu_selcall(call);
 		if (!menu.ringback && !menu_find_call(active_call_test, call))
 			play_ringback(call);
 		break;
 
-	case UA_EVENT_CALL_PROGRESS:
+	case BEVENT_CALL_PROGRESS:
 		menu_selcall(call);
 		uag_filter_calls(limit_earlymedia, NULL, NULL);
 
 		tmr_start(&menu.tmr_play, TONE_DELAY, delayed_play, NULL);
 		break;
 
-	case UA_EVENT_CALL_ANSWERED:
+	case BEVENT_CALL_ANSWERED:
 		menu_stop_play();
 		break;
 
-	case UA_EVENT_CALL_ESTABLISHED:
+	case BEVENT_CALL_ESTABLISHED:
 		menu_selcall(call);
 		/* stop any ringtones */
 		menu_stop_play();
 
-		/* We must stop the re-dialing if the call was
-		   established */
+		/* We must stop the re-dialing if the call was established */
 		redial_reset();
 		uag_hold_others(call);
 		break;
 
-	case UA_EVENT_CALL_CLOSED:
+	case BEVENT_CALL_CLOSED:
 		/* Activate the re-dialing if:
 		 *
 		 * - redial_attempts must be enabled in config
@@ -816,7 +885,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_REMOTE_SDP:
+	case BEVENT_CALL_REMOTE_SDP:
 		if (!str_cmp(prm, "answer") &&
 				call_state(call) == CALL_STATE_ESTABLISHED)
 			menu_selcall(call);
@@ -827,7 +896,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_CALL_TRANSFER:
+	case BEVENT_CALL_TRANSFER:
 		/*
 		 * Create a new call to transfer target.
 		 *
@@ -848,7 +917,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 			err = call_connect(call2, &pl);
 			if (err) {
-				warning("ua: transfer: connect error: %m\n",
+				warning("menu: transfer: connect error: %m\n",
 					err);
 			}
 			else {
@@ -863,25 +932,29 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 		}
 		break;
 
-	case UA_EVENT_CALL_TRANSFER_FAILED:
+	case BEVENT_CALL_TRANSFER_FAILED:
 		info("menu: transfer failure: %s\n", prm);
 		menu_stop_play();
 		call_hold(call, false);
 		menu_selcall(call);
 		break;
 
-	case UA_EVENT_CALL_REDIRECT:
-		uri = strchr(prm, ',') + 1;
+	case BEVENT_CALL_REDIRECT:
+		uri = strchr(prm, ',');
+		if (!uri)
+			break;
+
+		++uri;
 		if (account_sip_autoredirect(ua_account(ua))) {
 			info("menu: redirecting call to %s\n", uri);
-			menu_invite(prm);
+			menu_invite(uri);
 		}
 		else {
 			info("menu: redirect call to %s\n", uri);
 		}
 		break;
 
-	case UA_EVENT_REFER:
+	case BEVENT_REFER:
 		val = pl_null;
 		if (!re_regex(prm, strlen(prm), "sip:"))
 			pl_set_str(&val, "invite");
@@ -894,23 +967,23 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 		break;
 
-	case UA_EVENT_REGISTER_OK:
+	case BEVENT_REGISTER_OK:
 		check_registrations();
 		break;
 
-	case UA_EVENT_UNREGISTERING:
+	case BEVENT_UNREGISTERING:
 		return;
 
-	case UA_EVENT_MWI_NOTIFY:
-		info("----- MWI for %s -----\n", account_aor(acc));
+	case BEVENT_MWI_NOTIFY:
+		info("menu: ----- MWI for %s -----\n", account_aor(acc));
 		info("%s\n", prm);
 		break;
 
-	case UA_EVENT_AUDIO_ERROR:
+	case BEVENT_AUDIO_ERROR:
 		info("menu: audio error (%s)\n", prm);
 		break;
 
-	case UA_EVENT_MODULE:
+	case BEVENT_MODULE:
 		process_module_event(call, prm);
 		break;
 
@@ -918,7 +991,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 		break;
 	}
 
-	incall = ev == UA_EVENT_CALL_CLOSED ? count > 1 : count;
+	incall = ev == BEVENT_CALL_CLOSED ? count > 1 : count;
 	menu_set_incall(incall);
 	menu_update_callstatus(incall);
 }
@@ -938,8 +1011,10 @@ static void message_handler(struct ua *ua, const struct pl *peer,
 	ui_output(baresip_uis(), "\r%r: \"%b\"\n",
 		  peer, mbuf_buf(body), mbuf_get_left(body));
 
-	(void)play_file(NULL, baresip_player(), "message.wav", 0,
-	                cfg->audio.alert_mod, cfg->audio.alert_dev);
+	if (menu.message_tone) {
+		(void)play_file(NULL, baresip_player(), "message.wav", 0,
+				cfg->audio.alert_mod, cfg->audio.alert_dev);
+	}
 }
 
 
@@ -1078,7 +1153,7 @@ struct ua   *menu_ua_carg(struct re_printf *pf, const struct cmd_arg *carg,
 
 	if (le) {
 		ua = le->data;
-		info("%s: selected for request\n",
+		info("menu: %s: selected for request\n",
 				account_aor(ua_account(ua)));
 	}
 	else {
@@ -1119,6 +1194,76 @@ int menu_param_decode(const char *prm, const char *name, struct pl *val)
 }
 
 
+/**
+ * Find ua and call from command arguments.
+ *
+ * Assumes that the first argument passed in carg->prm is a valid call-id
+ * (if passed at all). If carg->data is set, it MUST be a pointer to a
+ * struct ua. If no call-id is passed in carg->prm, the currently active call
+ * is returned, if there is an active call.
+ *
+ * @param pf     Print backend
+ * @param carg   Command arguments
+ * @param uap    Pointer-pointer to ua. Set on successful return.
+ * @param callp  Pointer-pointer to call. Set on successful return.
+ *
+ * @return 0 for success, otherwise errorcode
+ */
+int menu_get_call_ua(struct re_printf *pf, const struct cmd_arg *carg,
+		     struct ua **uap, struct call **callp)
+{
+	int err = 0;
+	struct ua *ua;
+	struct call *call;
+	const char *eq;
+	char *cid = NULL;
+	struct pl pl = PL_INIT;
+
+	if (!carg || !uap || !callp)
+		return EINVAL;
+
+	/* fallback */
+	ua = carg->data ? carg->data : menu_uacur();
+	call = ua_call(ua);
+
+	if (re_regex(carg->prm, str_len(carg->prm), "[^ ]+", &pl))
+		goto out;
+
+	/* A call-id MUST NOT contain an '='. See RFC 3261 section 25.1. */
+	eq = pl_strchr(&pl, '=');
+	if (eq)
+		goto out;
+
+	err = pl_strdup(&cid, &pl);
+	if (err)
+		return err;
+
+	call = uag_call_find(cid);
+	if (!call) {
+		(void)re_hprintf(pf, "call %s not found\n", cid);
+		err = EINVAL;
+		goto out;
+	}
+
+	ua = call_get_ua(call);
+
+out:
+	if (!call && !err) {
+		(void)re_hprintf(pf, "no active call\n");
+		err = ENOENT;
+	}
+
+	if (!err) {
+		*uap = ua;
+		*callp = call;
+	}
+
+	mem_deref(cid);
+
+	return err;
+}
+
+
 static int module_init(void)
 {
 	struct pl val;
@@ -1132,6 +1277,7 @@ static int module_init(void)
 	menu.clean_number = false;
 	menu.play = NULL;
 	menu.adelay = -1;
+	menu.message_tone = true;
 	err = odict_alloc(&menu.ovaufile, 8);
 	if (err)
 		return err;
@@ -1142,6 +1288,7 @@ static int module_init(void)
 	conf_get_bool(conf_cur(), "ringback_disabled",
 		      &menu.ringback_disabled);
 	conf_get_bool(conf_cur(), "menu_clean_number", &menu.clean_number);
+	conf_get_bool(conf_cur(), "menu_message_tone", &menu.message_tone);
 
 	if (0 == conf_get(conf_cur(), "redial_attempts", &val) &&
 	    0 == pl_strcasecmp(&val, "inf")) {
@@ -1179,7 +1326,7 @@ static int module_init(void)
 	if (err)
 		return err;
 
-	err = uag_event_register(ua_event_handler, NULL);
+	err = bevent_register(event_handler, NULL);
 	if (err)
 		return err;
 
@@ -1199,7 +1346,7 @@ static int module_close(void)
 
 	message_unlisten(baresip_message(), message_handler);
 
-	uag_event_unregister(ua_event_handler);
+	bevent_unregister(event_handler);
 	static_menu_unregister();
 	dial_menu_unregister();
 	dynamic_menu_unregister();

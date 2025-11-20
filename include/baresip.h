@@ -13,7 +13,7 @@ extern "C" {
 
 
 /** Defines the Baresip version string */
-#define BARESIP_VERSION "3.13.0"
+#define BARESIP_VERSION "4.3.0"
 
 
 #ifndef NET_MAX_NS
@@ -106,6 +106,8 @@ int account_set_stun_host(struct account *acc, const char *host);
 int account_set_stun_port(struct account *acc, uint16_t port);
 int account_set_stun_user(struct account *acc, const char *user);
 int account_set_stun_pass(struct account *acc, const char *pass);
+int account_set_ausrc_dev(struct account *acc, const char *dev);
+int account_set_auplay_dev(struct account *acc, const char *dev);
 int account_set_mediaenc(struct account *acc, const char *mediaenc);
 int account_set_medianat(struct account *acc, const char *medianat);
 int account_set_audio_codecs(struct account *acc, const char *codecs);
@@ -123,6 +125,7 @@ struct uri *account_luri(const struct account *acc);
 uint32_t account_regint(const struct account *acc);
 uint32_t account_fbregint(const struct account *acc);
 uint32_t account_pubint(const struct account *acc);
+int account_set_pubint(struct account *acc, uint32_t pubint);
 uint32_t account_ptime(const struct account *acc);
 uint32_t account_prio(const struct account *acc);
 enum answermode account_answermode(const struct account *acc);
@@ -220,6 +223,8 @@ int  call_progress_dir(struct call *call,
 		       enum sdp_dir adir, enum sdp_dir vdir);
 int  call_progress(struct call *call);
 void call_hangup(struct call *call, uint16_t scode, const char *reason);
+void call_hangupf(struct call *call, uint16_t scode, const char *reason,
+		  const char *fmt, ...);
 int  call_modify(struct call *call);
 int  call_hold(struct call *call, bool hold);
 void call_set_audio_ldir(struct call *call, enum sdp_dir dir);
@@ -232,8 +237,9 @@ bool call_has_video(const struct call *call);
 bool call_early_video_available(const struct call *call);
 bool call_refresh_allowed(const struct call *call);
 bool call_ack_pending(const struct call *call);
+bool call_sess_cmp(const struct call *call, const struct sip_msg *msg);
 int  call_transfer(struct call *call, const char *uri);
-int  call_replace_transfer(struct call *target_call, struct call *source_call);
+int  call_replace_transfer(struct call *call, struct call *source_call);
 int  call_status(struct re_printf *pf, const struct call *call);
 int  call_debug(struct re_printf *pf, const struct call *call);
 int  call_notify_sipfrag(struct call *call, uint16_t scode,
@@ -247,7 +253,9 @@ uint32_t      call_duration(const struct call *call);
 uint32_t      call_setup_duration(const struct call *call);
 const char   *call_id(const struct call *call);
 const char   *call_peeruri(const struct call *call);
+const char   *call_contacturi(const struct call *call);
 const char   *call_peername(const struct call *call);
+const char   *call_statename(const struct call *call);
 const char   *call_localuri(const struct call *call);
 const char   *call_alerturi(const struct call *call);
 const char   *call_diverteruri(const struct call *call);
@@ -268,13 +276,14 @@ const struct list *call_get_custom_hdrs(const struct call *call);
 void call_set_media_direction(struct call *call, enum sdp_dir a,
 			     enum sdp_dir v);
 void call_set_mdir(struct call *call, enum sdp_dir a, enum sdp_dir v);
+void call_get_mdir(struct call *call, enum sdp_dir *ap, enum sdp_dir *vp);
 void call_set_media_estdir(struct call *call, enum sdp_dir a, enum sdp_dir v);
+void call_get_media_estdir(struct call *call,
+			   enum sdp_dir *ap, enum sdp_dir *vp);
 void call_start_answtmr(struct call *call, uint32_t ms);
 bool          call_supported(struct call *call, uint16_t tags);
 const char   *call_user_data(const struct call *call);
 int call_set_user_data(struct call *call, const char *user_data);
-void call_set_evstop(struct call *call, bool stop);
-bool call_is_evstop(struct call *call);
 int call_msg_src(const struct call *call, struct sa *sa);
 enum sip_transp call_transp(const struct call *call);
 enum sdp_neg_state call_sdp_neg_state(const struct call *call);
@@ -308,7 +317,7 @@ typedef int (confline_h)(const struct pl *addr, void *arg);
 int  conf_configure(void);
 int  conf_configure_buf(const uint8_t *buf, size_t sz);
 int  conf_modules(void);
-void conf_path_set(const char *path);
+int  conf_path_set(const char *path);
 int  conf_path_get(char *path, size_t sz);
 int  conf_parse(const char *filename, confline_h *ch, void *arg);
 int  conf_get_range(const struct conf *conf, const char *name,
@@ -362,6 +371,7 @@ struct config_sip {
 	bool verify_client;     /**< Enable SIP TLS verify client   */
 	enum tls_resume_mode tls_resume; /** TLS resumption mode    */
 	uint8_t tos;            /**< Type-of-Service for SIP        */
+	uint32_t reg_filt;	/**< Registrar filter transport mask*/
 };
 
 /** Call config */
@@ -369,6 +379,7 @@ struct config_call {
 	uint32_t local_timeout; /**< Incoming call timeout [sec] 0=off    */
 	uint32_t max_calls;     /**< Maximum number of calls, 0=unlimited */
 	bool hold_other_calls;  /**< Hold other calls */
+	bool accept;            /**< Accept call by baresip core          */
 };
 
 /** Audio */
@@ -420,12 +431,9 @@ struct config_avt {
 	bool rtcp_mux;          /**< RTP/RTCP multiplexing          */
 	struct {
 		enum jbuf_type jbtype;  /**< Jitter buffer type     */
-		struct range jbuf_del;  /**< Delay, number of frames*/
-	} audio;
-	struct {
-		enum jbuf_type jbtype;  /**< Jitter buffer type     */
-		struct range jbuf_del;  /**< Delay, number of frames*/
-	} video;
+		struct range jbuf_del;  /**< Max./Min. Delay [ms]   */
+		uint32_t jbuf_sz;       /**< Max. buffer  [packets] */
+	} audio, video;
 	bool rtp_stats;         /**< Enable RTP statistics          */
 	uint32_t rtp_timeout;   /**< RTP Timeout in seconds (0=off) */
 	bool bundle;            /**< Media Multiplexing (BUNDLE)    */
@@ -504,6 +512,8 @@ struct list     *contact_list(const struct contacts *contacts);
 const char      *contact_str(const struct contact *c);
 const char      *contact_uri(const struct contact *c);
 const char      *contact_presence_str(enum presence_status status);
+void             contact_get_ldir(const struct contact *c,
+				  enum sdp_dir *aup, enum sdp_dir *vidp);
 struct le       *contact_le(struct contact *cnt);
 void contacts_set_current(struct contacts *contacts, struct contact *cnt);
 struct contact *contacts_current(const struct contacts *contacts);
@@ -578,6 +588,8 @@ typedef void (ausrc_error_h)(int err, const char *str, void *arg);
 typedef int  (ausrc_alloc_h)(struct ausrc_st **stp, const struct ausrc *ausrc,
 			     struct ausrc_prm *prm, const char *device,
 			     ausrc_read_h *rh, ausrc_error_h *errh, void *arg);
+typedef int  (ausrc_info_h)(const struct ausrc *ausrc,
+			    struct ausrc_prm *prm, const char *device);
 
 /** Defines an Audio Source */
 struct ausrc {
@@ -585,6 +597,7 @@ struct ausrc {
 	const char      *name;
 	struct list      dev_list;
 	ausrc_alloc_h   *alloch;
+	ausrc_info_h    *infoh;
 };
 
 int ausrc_register(struct ausrc **asp, struct list *ausrcl, const char *name,
@@ -594,6 +607,8 @@ int ausrc_alloc(struct ausrc_st **stp, struct list *ausrcl,
 		const char *name,
 		struct ausrc_prm *prm, const char *device,
 		ausrc_read_h *rh, ausrc_error_h *errh, void *arg);
+int ausrc_info(struct list *ausrcl,
+	       const char *name, struct ausrc_prm *prm, const char *device);
 
 
 /*
@@ -673,6 +688,7 @@ typedef int (aufilt_decode_h)(struct aufilt_dec_st *st,
 struct aufilt {
 	struct le le;
 	const char *name;
+	bool enabled;
 	aufilt_encupd_h *encupdh;
 	aufilt_encode_h *ench;
 	aufilt_decupd_h *decupdh;
@@ -681,6 +697,7 @@ struct aufilt {
 
 void aufilt_register(struct list *aufiltl, struct aufilt *af);
 void aufilt_unregister(struct aufilt *af);
+void aufilt_enable(struct list *aufiltl, const char *name, bool enable);
 
 
 /*
@@ -711,12 +728,24 @@ void log_enable_info(bool enable);
 void log_enable_stdout(bool enable);
 void log_enable_timestamps(bool enable);
 void log_enable_color(bool enable);
-void vlog(enum log_level level, const char *fmt, va_list ap);
-void loglv(enum log_level level, const char *fmt, ...);
-void debug(const char *fmt, ...);
-void info(const char *fmt, ...);
-void warning(const char *fmt, ...);
 
+#ifdef HAVE_RE_ARG
+#define loglv(level, fmt, ...)                                                \
+	_loglv(true, (level), (fmt), RE_VA_ARGS(__VA_ARGS__))
+#define debug(fmt, ...) _debug(true, (fmt), RE_VA_ARGS(__VA_ARGS__))
+#define info(fmt, ...) _info(true, (fmt), RE_VA_ARGS(__VA_ARGS__))
+#define warning(fmt, ...) _warning(true, (fmt), RE_VA_ARGS(__VA_ARGS__))
+#else
+#define loglv _loglv
+#define debug(...) _debug(false, __VA_ARGS__)
+#define info(...) _info(false, __VA_ARGS__)
+#define warning(...) _warning(false, __VA_ARGS__)
+#endif
+
+void _loglv(bool safe, enum log_level level, const char *fmt, ...);
+void _debug(bool safe, const char *fmt, ...);
+void _info(bool safe, const char *fmt, ...);
+void _warning(bool safe, const char *fmt, ...);
 
 /*
  * Menc - Media encryption (for RTP)
@@ -800,6 +829,7 @@ const struct sa *net_laddr_for(const struct network *net,
 bool net_is_laddr(const struct network *net, struct sa *sa);
 int net_set_dst_scopeid(const struct network *net, struct sa *dst);
 struct dnsc     *net_dnsc(const struct network *net);
+int net_set_dnsc(struct network *net, struct dnsc *dnsc);
 
 
 /*
@@ -828,48 +858,53 @@ void play_set_path(struct player *player, const char *path);
 
 struct ua;
 
-/** Events from User-Agent */
-enum ua_event {
-	UA_EVENT_REGISTERING = 0,
-	UA_EVENT_REGISTER_OK,
-	UA_EVENT_REGISTER_FAIL,
-	UA_EVENT_UNREGISTERING,
-	UA_EVENT_FALLBACK_OK,
-	UA_EVENT_FALLBACK_FAIL,
-	UA_EVENT_MWI_NOTIFY,
-	UA_EVENT_CREATE,
-	UA_EVENT_SHUTDOWN,
-	UA_EVENT_EXIT,
+/** Baresip event value */
+enum bevent_ev {
+	BEVENT_REGISTERING = 0,
+	BEVENT_REGISTER_OK,
+	BEVENT_REGISTER_FAIL,
+	BEVENT_UNREGISTERING,
+	BEVENT_FALLBACK_OK,
+	BEVENT_FALLBACK_FAIL,
+	BEVENT_MWI_NOTIFY,
+	BEVENT_CREATE,
+	BEVENT_SHUTDOWN,
+	BEVENT_EXIT,
 
-	UA_EVENT_CALL_INCOMING,
-	UA_EVENT_CALL_OUTGOING,
-	UA_EVENT_CALL_RINGING,
-	UA_EVENT_CALL_PROGRESS,
-	UA_EVENT_CALL_ANSWERED,
-	UA_EVENT_CALL_ESTABLISHED,
-	UA_EVENT_CALL_CLOSED,
-	UA_EVENT_CALL_TRANSFER,
-	UA_EVENT_CALL_REDIRECT,
-	UA_EVENT_CALL_TRANSFER_FAILED,
-	UA_EVENT_CALL_DTMF_START,
-	UA_EVENT_CALL_DTMF_END,
-	UA_EVENT_CALL_RTPESTAB,
-	UA_EVENT_CALL_RTCP,
-	UA_EVENT_CALL_MENC,
-	UA_EVENT_VU_TX,
-	UA_EVENT_VU_RX,
-	UA_EVENT_AUDIO_ERROR,
-	UA_EVENT_CALL_LOCAL_SDP,      /**< param: offer or answer */
-	UA_EVENT_CALL_REMOTE_SDP,     /**< param: offer or answer */
-	UA_EVENT_CALL_HOLD,           /**< Call put on-hold by peer          */
-	UA_EVENT_CALL_RESUME,         /**< Call resumed by peer              */
-	UA_EVENT_REFER,
-	UA_EVENT_MODULE,
-	UA_EVENT_END_OF_FILE,
-	UA_EVENT_CUSTOM,
+	BEVENT_CALL_INCOMING,
+	BEVENT_CALL_OUTGOING,
+	BEVENT_CALL_RINGING,
+	BEVENT_CALL_PROGRESS,
+	BEVENT_CALL_ANSWERED,
+	BEVENT_CALL_ESTABLISHED,
+	BEVENT_CALL_CLOSED,
+	BEVENT_CALL_TRANSFER,
+	BEVENT_CALL_REDIRECT,
+	BEVENT_CALL_TRANSFER_FAILED,
+	BEVENT_CALL_DTMF_START,
+	BEVENT_CALL_DTMF_END,
+	BEVENT_CALL_RTPESTAB,
+	BEVENT_CALL_RTCP,
+	BEVENT_CALL_MENC,
+	BEVENT_VU_TX,
+	BEVENT_VU_RX,
+	BEVENT_AUDIO_ERROR,
+	BEVENT_CALL_LOCAL_SDP,      /**< param: offer or answer */
+	BEVENT_CALL_REMOTE_SDP,     /**< param: offer or answer */
+	BEVENT_CALL_HOLD,           /**< Call put on-hold by peer          */
+	BEVENT_CALL_RESUME,         /**< Call resumed by peer              */
+	BEVENT_REFER,
+	BEVENT_MODULE,
+	BEVENT_END_OF_FILE,
+	BEVENT_CUSTOM,
+	BEVENT_SIPSESS_CONN,
 
-	UA_EVENT_MAX,
+	BEVENT_MAX,
 };
+
+
+struct bevent;
+
 
 /** SIP auto answer method */
 enum answer_method {
@@ -879,9 +914,8 @@ enum answer_method {
 	ANSM_ALERTINFO,
 };
 
-/** Defines the User-Agent event handler */
-typedef void (ua_event_h)(struct ua *ua, enum ua_event ev,
-			  struct call *call, const char *prm, void *arg);
+/** Defines the Baresip event handler */
+typedef void (bevent_h)(enum bevent_ev ev, struct bevent *event, void *arg);
 typedef void (options_resp_h)(int err, const struct sip_msg *msg, void *arg);
 typedef void (refer_resp_h)(int err, const struct sip_msg *msg, void *arg);
 
@@ -897,6 +931,9 @@ int  ua_connect_dir(struct ua *ua, struct call **callp,
 		    enum vidmode vmode, enum sdp_dir adir, enum sdp_dir vdir);
 void ua_hangup(struct ua *ua, struct call *call,
 	       uint16_t scode, const char *reason);
+void ua_hangupf(struct ua *ua, struct call *call,
+		uint16_t scode, const char *reason, const char *fmt, ...);
+int  ua_accept(struct ua *ua, const struct sip_msg *msg);
 int  ua_answer(struct ua *ua, struct call *call, enum vidmode vmode);
 int  ua_hold_answer(struct ua *ua, struct call *call, enum vidmode vmode);
 int  ua_options_send(struct ua *ua, const char *uri,
@@ -939,11 +976,13 @@ int  ua_call_alloc(struct call **callp, struct ua *ua,
 		   struct call *xcall, const char *local_uri,
 		   bool use_rtp);
 struct call *ua_find_call_state(const struct ua *ua, enum call_state st);
+struct call *ua_find_call_msg(struct ua *ua, const struct sip_msg *msg);
 int ua_raise(struct ua *ua);
 int ua_set_autoanswer_value(struct ua *ua, const char *value);
 void ua_add_extension(struct ua *ua, const char *extension);
 void ua_remove_extension(struct ua *ua, const char *extension);
 bool ua_req_allowed(const struct ua *ua, const struct sip_msg *msg);
+bool ua_req_check_origin(const struct ua *ua, const struct sip_msg *msg);
 
 
 /* One instance */
@@ -955,8 +994,6 @@ int  uag_hold_others(struct call *call);
 void uag_set_nodial(bool nodial);
 bool uag_nodial(void);
 void uag_set_exit_handler(ua_exit_h *exith, void *arg);
-void uag_set_dnd(bool dnd);
-bool uag_dnd(void);
 void uag_enable_sip_trace(bool enable);
 int  uag_reset_transp(bool reg, bool reinvite);
 void uag_set_sub_handler(sip_msg_h *subh);
@@ -1077,6 +1114,7 @@ struct vidpacket {
 	size_t size;         /**< Size of buffer                    */
 	uint64_t timestamp;  /**< Timestamp in VIDEO_TIMEBASE units */
 	bool keyframe;       /**< True=keyframe, False=deltaframe   */
+	bool picup;          /**< Picture update requested          */
 };
 
 /* Declare function pointer */
@@ -1388,7 +1426,6 @@ uint64_t audio_jb_current_value(const struct audio *au);
 int  audio_set_bitrate(struct audio *au, uint32_t bitrate);
 bool audio_rxaubuf_started(const struct audio *au);
 int  audio_update(struct audio *a);
-int  audio_start(struct audio *a);
 int  audio_start_source(struct audio *a, struct list *ausrcl,
 			struct list *aufiltl);
 void audio_stop(struct audio *a);
@@ -1403,6 +1440,7 @@ int  audio_decoder_set(struct audio *a, const struct aucodec *ac,
 const struct aucodec *audio_codec(const struct audio *au, bool tx);
 struct config_audio *audio_config(struct audio *au);
 bool audio_txtelev_empty(const struct audio *au);
+void audio_call_telev_handler(const struct audio *au, int key, bool end);
 
 
 /*
@@ -1416,6 +1454,7 @@ typedef void (video_err_h)(int err, const char *str, void *arg);
 int  video_alloc(struct video **vp, struct list *streaml,
 		 const struct stream_param *stream_prm,
 		 const struct config *cfg,
+		 const struct account *acc,
 		 struct sdp_session *sdp_sess,
 		 const struct mnat *mnat, struct mnat_sess *mnat_sess,
 		 const struct menc *menc, struct menc_sess *menc_sess,
@@ -1512,6 +1551,8 @@ void stream_enable_rtp_timeout(struct stream *strm, uint32_t timeout_ms);
 struct jbuf;
 struct rtp_header;
 
+typedef uint64_t (jbuf_next_play_h)(const struct jbuf *jb);
+
 /** Jitter buffer statistics */
 struct jbuf_stat {
 	uint32_t n_put;        /**< Number of frames put into jitter buffer */
@@ -1519,23 +1560,33 @@ struct jbuf_stat {
 	uint32_t n_oos;        /**< Number of out-of-sequence frames        */
 	uint32_t n_dups;       /**< Number of duplicate frames detected     */
 	uint32_t n_late;       /**< Number of frames arriving too late      */
+	uint32_t n_late_lost;  /**< Number of frames too late and lost      */
 	uint32_t n_lost;       /**< Number of lost frames                   */
 	uint32_t n_overflow;   /**< Number of overflows                     */
-	uint32_t n_underflow;  /**< Number of underflows                    */
 	uint32_t n_flush;      /**< Number of times jitter buffer flushed   */
+	uint32_t n_gnacks;     /**< Number of generic NACKS send            */
+	uint32_t c_delay;      /**< Current jitter buffer delay in [ms]     */
+	uint32_t c_packets;    /**< Current packets                         */
+	uint32_t c_jitter;     /**< Current jitter delay in [ms]            */
+	int32_t  c_skew;       /**< Current jitter buffer skew in [ms]      */
 };
 
 
-int  jbuf_alloc(struct jbuf **jbp, uint32_t min, uint32_t max);
+int jbuf_alloc(struct jbuf **jbp, uint32_t mind, uint32_t maxd,
+	       uint32_t maxsz);
+void jbuf_set_srate(struct jbuf *jb, uint32_t srate);
+void jbuf_set_id(struct jbuf *jb, struct pl *id);
 int  jbuf_set_type(struct jbuf *jb, enum jbuf_type jbtype);
+void jbuf_set_gnack(struct jbuf *jb, struct rtp_sock *rtp);
 int  jbuf_put(struct jbuf *jb, const struct rtp_header *hdr, void *mem);
 int  jbuf_get(struct jbuf *jb, struct rtp_header *hdr, void **mem);
 int  jbuf_drain(struct jbuf *jb, struct rtp_header *hdr, void **mem);
 void jbuf_flush(struct jbuf *jb);
 int  jbuf_stats(const struct jbuf *jb, struct jbuf_stat *jstat);
 int  jbuf_debug(struct re_printf *pf, const struct jbuf *jb);
-uint32_t jbuf_frames(const struct jbuf *jb);
 uint32_t jbuf_packets(const struct jbuf *jb);
+int32_t jbuf_next_play(const struct jbuf *jb);
+void jbuf_set_next_play_h(struct jbuf *jb, jbuf_next_play_h *p);
 
 
 /*
@@ -1651,17 +1702,27 @@ void module_app_unload(void);
  * Generic event
  */
 
-int event_encode_dict(struct odict *od, struct ua *ua, enum ua_event ev,
-		      struct call *call, const char *prm);
+int odict_encode_bevent(struct odict *od, struct bevent *event);
 int event_add_au_jb_stat(struct odict *od_parent, const struct call *call);
-int  uag_event_register(ua_event_h *eh, void *arg);
-void uag_event_unregister(ua_event_h *eh);
-void ua_event(struct ua *ua, enum ua_event ev, struct call *call,
-	      const char *fmt, ...);
+int  bevent_register(bevent_h *eh, void *arg);
+void bevent_unregister(bevent_h *eh);
+int bevent_app_emit(enum bevent_ev ev, void *arg, const char *fmt, ...);
+int bevent_ua_emit(enum bevent_ev ev, struct ua *ua, const char *fmt, ...);
+int bevent_call_emit(enum bevent_ev ev, struct call *call,
+		     const char *fmt, ...);
+int bevent_sip_msg_emit(enum bevent_ev ev, const struct sip_msg *msg,
+			const char *fmt, ...);
 void module_event(const char *module, const char *event, struct ua *ua,
 		struct call *call, const char *fmt, ...);
-const char  *uag_event_str(enum ua_event ev);
-
+const char  *bevent_str(enum bevent_ev ev);
+struct call    *bevent_get_call(const struct bevent *event);
+struct ua      *bevent_get_ua(const struct bevent *event);
+const struct sip_msg *bevent_get_msg(const struct bevent *event);
+void *bevent_get_apparg(const struct bevent *event);
+enum bevent_ev bevent_get_value(const struct bevent *event);
+const char *bevent_get_text(const struct bevent *event);
+void bevent_set_error(struct bevent *event, int err);
+void bevent_stop(struct bevent *event);
 
 /*
  * Baresip instance
@@ -1685,6 +1746,7 @@ struct list   *baresip_vidsrcl(void);
 struct list   *baresip_vidispl(void);
 struct list   *baresip_vidfiltl(void);
 struct ui_sub *baresip_uis(void);
+const char *baresip_version(void);
 
 
 /*

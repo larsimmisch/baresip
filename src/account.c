@@ -40,6 +40,10 @@ static void destructor(void *arg)
 	mem_deref(acc->ausrc_dev);
 	mem_deref(acc->auplay_mod);
 	mem_deref(acc->auplay_dev);
+	mem_deref(acc->vidsrc_mod);
+	mem_deref(acc->vidsrc_dev);
+	mem_deref(acc->viddisp_mod);
+	mem_deref(acc->viddisp_dev);
 	mem_deref(acc->cert);
 	mem_deref(acc->extra);
 	mem_deref(acc->uas_user);
@@ -128,9 +132,6 @@ static int stunsrv_decode(struct account *acc, const struct sip_addr *aor)
 
 	if (0 == msg_param_exists(&aor->params, "stunpass", &tmp))
 		err |= param_dstr(&acc->stun_pass, &aor->params, "stunpass");
-	else if (pl_isset(&uri.password))
-		err |= re_sdprintf(&acc->stun_pass, "%H",
-					uri_password_unescape, &uri.password);
 
 	return err;
 }
@@ -561,7 +562,7 @@ static int encode_uri_user(struct re_printf *pf, const struct uri *uri)
 {
 	struct uri uuri = *uri;
 
-	uuri.password = uuri.params = uuri.headers = pl_null;
+	uuri.params = uuri.headers = pl_null;
 
 	return uri_encode(pf, &uuri);
 }
@@ -602,7 +603,6 @@ int account_alloc(struct account **accp, const char *sipaddr)
 	}
 
 	acc->luri = acc->laddr.uri;
-	acc->luri.password = pl_null;
 
 	err = re_sdprintf(&acc->aor, "%H", encode_uri_user, &acc->luri);
 	if (err)
@@ -630,7 +630,16 @@ int account_alloc(struct account **accp, const char *sipaddr)
 	err |= decode_pair(&acc->auplay_mod, &acc->auplay_dev,
 			   &acc->laddr.params, "audio_player");
 	if (err) {
-		warning("account: audio_source/player parse error\n");
+		warning("account: audio_source/audio_player parse error\n");
+		goto out;
+	}
+
+	err  = decode_pair(&acc->vidsrc_mod, &acc->vidsrc_dev,
+			   &acc->laddr.params, "video_source");
+	err |= decode_pair(&acc->viddisp_mod, &acc->viddisp_dev,
+			   &acc->laddr.params, "video_display");
+	if (err) {
+		warning("account: video_source/video_display parse error\n");
 		goto out;
 	}
 
@@ -900,6 +909,50 @@ int account_set_stun_pass(struct account *acc, const char *pass)
 
 	if (pass)
 		return str_dup(&acc->stun_pass, pass);
+
+	return 0;
+}
+
+
+/**
+ * Set the Audio Source Device for a SIP account
+ *
+ * @param acc  User-Agent account
+ * @param dev  Device string
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int account_set_ausrc_dev(struct account *acc, const char *dev)
+{
+	if (!acc)
+		return EINVAL;
+
+	acc->ausrc_dev = mem_deref(acc->ausrc_dev);
+
+	if (dev)
+		return str_dup(&acc->ausrc_dev, dev);
+
+	return 0;
+}
+
+
+/**
+ * Set the Audio Playout Device for a SIP account
+ *
+ * @param acc  User-Agent account
+ * @param dev  Device string
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int account_set_auplay_dev(struct account *acc, const char *dev)
+{
+	if (!acc)
+		return EINVAL;
+
+	acc->auplay_dev = mem_deref(acc->auplay_dev);
+
+	if (dev)
+		return str_dup(&acc->auplay_dev, dev);
 
 	return 0;
 }
@@ -1264,6 +1317,25 @@ uint32_t account_prio(const struct account *acc)
 uint32_t account_pubint(const struct account *acc)
 {
 	return acc ? acc->pubint : 0;
+}
+
+
+/**
+ * Set the SIP publish interval for a SIP account
+ *
+ * @param acc     User-Agent account
+ * @param pubint  Publish interval in [seconds]
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int account_set_pubint(struct account *acc, uint32_t pubint)
+{
+	if (!acc)
+		return EINVAL;
+
+	acc->pubint = pubint;
+
+	return 0;
 }
 
 
@@ -2058,7 +2130,6 @@ int account_json_api(struct odict *od, struct odict *odcfg,
 {
 	int err = 0;
 	struct odict *obn = NULL;
-	const char *stunhost = "";
 	size_t i;
 
 	if (!acc)
@@ -2086,7 +2157,8 @@ int account_json_api(struct odict *od, struct odict *odcfg,
 	}
 	err |= odict_entry_add(odcfg, "sip_nat_outbound", ODICT_ARRAY, obn);
 
-	stunhost = account_stun_host(acc) ? account_stun_host(acc) : "";
+	const char *stunhost =
+		account_stun_host(acc) ? account_stun_host(acc) : "";
 	err |= odict_entry_add(odcfg, "stun_host", ODICT_STRING, stunhost);
 	err |= odict_entry_add(odcfg, "stun_port", ODICT_INT,
 			account_stun_port(acc));

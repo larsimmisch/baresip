@@ -124,6 +124,10 @@ extern const char test_certificate[];
 #endif
 
 
+void test_set_datapath(const char *path);
+const char *test_datapath(void);
+
+
 /*
  * Mock DNS-Server
  */
@@ -207,6 +211,7 @@ int test_call_medianat(void);
 int test_call_multiple(void);
 int test_call_progress(void);
 int test_call_reject(void);
+int test_call_cancel(void);
 int test_call_rtcp(void);
 int test_call_rtp_timeout(void);
 int test_call_tcp(void);
@@ -223,18 +228,25 @@ int test_call_100rel_audio(void);
 int test_call_100rel_video(void);
 int test_call_hold_resume(void);
 int test_call_srtp_tx_rekey(void);
+int test_call_uag_find_msg(void);
+#ifdef USE_TLS
+int test_call_sni(void);
+int test_call_cert_select(void);
+#endif
 int test_cmd(void);
 int test_cmd_long(void);
 int test_contact(void);
-int test_event(void);
+int test_bevent_register(void);
 int test_jbuf(void);
 int test_jbuf_adaptive(void);
-int test_jbuf_adaptive_video(void);
+int test_jbuf_video(void);
+int test_jbuf_gnack(void);
 int test_message(void);
 int test_network(void);
 int test_play(void);
 int test_stunuri(void);
 int test_ua_alloc(void);
+int test_ua_cuser(void);
 int test_ua_options(void);
 int test_ua_refer(void);
 int test_ua_register(void);

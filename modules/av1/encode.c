@@ -15,11 +15,6 @@
 #include "av1.h"
 
 
-#ifndef AOM_USAGE_REALTIME
-#define AOM_USAGE_REALTIME (1)
-#endif
-
-
 struct videnc_state {
 	aom_codec_ctx_t ctx;
 	struct vidsz size;
@@ -137,9 +132,9 @@ static int packetize_rtp(struct videnc_state *ves,
 {
 	bool new_flag = keyframe;
 
-	return av1_packetize_high(&new_flag, true, rtp_ts, buf, size,
-				  ves->pktsize, (av1_packet_h *)ves->pkth,
-				  (void *)ves->vid);
+	return av1_packetize(&new_flag, true, rtp_ts, buf, size,
+			     ves->pktsize, (av1_packet_h *)ves->pkth,
+			     (void *)ves->vid);
 }
 
 

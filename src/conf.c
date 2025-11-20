@@ -3,8 +3,6 @@
  *
  * Copyright (C) 2010 Alfred E. Heggestad
  */
-#define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
 #include <fcntl.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -40,8 +38,8 @@
 #endif
 
 
-static const char *conf_path = NULL;
-static struct conf *conf_obj;
+static char *conf_path = NULL;
+static struct conf *conf_obj = NULL;
 
 
 static void print_populated(const char *what, uint32_t n)
@@ -143,10 +141,13 @@ int conf_parse(const char *filename, confline_h *ch, void *arg)
  * Set the path to configuration files
  *
  * @param path Configuration path
+ *
+ * @return 0 if success, otherwise errorcode
  */
-void conf_path_set(const char *path)
+int conf_path_set(const char *path)
 {
-	conf_path = path;
+	mem_deref(conf_path);
+	return str_dup(&conf_path, path);
 }
 
 
@@ -315,24 +316,6 @@ int conf_get_sa(const struct conf *conf, const char *name, struct sa *sa)
 }
 
 
-int conf_get_float(const struct conf *conf, const char *name, double *val)
-{
-	struct pl opt;
-	int err;
-
-	if (!conf || !name || !val)
-		return EINVAL;
-
-	err = conf_get(conf, name, &opt);
-	if (err)
-		return err;
-
-	*val = pl_float(&opt);
-
-	return 0;
-}
-
-
 enum jbuf_type conf_get_jbuf_type(const struct pl *pl)
 {
 	if (0 == pl_strcasecmp(pl, "off"))      return JBUF_OFF;
@@ -478,6 +461,7 @@ struct conf *conf_cur(void)
 void conf_close(void)
 {
 	conf_obj = mem_deref(conf_obj);
+	conf_path = mem_deref(conf_path);
 }
 
 

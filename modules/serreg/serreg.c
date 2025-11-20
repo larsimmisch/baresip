@@ -311,31 +311,29 @@ static uint32_t min_regint(void)
 }
 
 
-static void ua_event_handler(struct ua *ua, enum ua_event ev,
-			     struct call *call, const char *prm, void *arg)
+static void event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
-	(void)call;
-	(void)prm;
+	struct ua *ua = bevent_get_ua(event);
 	(void)arg;
 
 	switch (ev) {
 
-	case UA_EVENT_FALLBACK_FAIL:
+	case BEVENT_FALLBACK_FAIL:
 		debug("serreg: fallback fail %s.\n",
 		      account_aor(ua_account(ua)));
 		break;
 
-	case UA_EVENT_FALLBACK_OK:
+	case BEVENT_FALLBACK_OK:
 		fallback_ok(ua);
 		break;
 
-	case UA_EVENT_REGISTER_OK:
+	case BEVENT_REGISTER_OK:
 		sreg.prio = account_prio(ua_account(ua));
 		check_registrations();
 		sreg.sprio = sreg.prio;
 		break;
 
-	case UA_EVENT_REGISTER_FAIL:
+	case BEVENT_REGISTER_FAIL:
 		next_account(ua);
 		if (account_fbregint(ua_account(ua)))
 			(void)ua_fallback(ua);
@@ -359,14 +357,14 @@ static int module_init(void)
 	sreg.ready = false;
 	sreg.sprio = (uint32_t) -1;
 
-	err = uag_event_register(ua_event_handler, NULL);
+	err = bevent_register(event_handler, NULL);
 	return err;
 }
 
 
 static int module_close(void)
 {
-	uag_event_unregister(ua_event_handler);
+	bevent_unregister(event_handler);
 	tmr_cancel(&sreg.tmr);
 
 	return 0;

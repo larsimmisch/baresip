@@ -4,9 +4,6 @@
  * Copyright (C) 2010 Alfred E. Heggestad
  * \ref GenericAudioStream
  */
-#define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
-#define _POSIX_C_SOURCE 199309L
 #include <string.h>
 #include <stdlib.h>
 #ifdef HAVE_UNISTD_H
@@ -131,7 +128,7 @@ struct audio {
 	bool started;                 /**< Stream is started flag          */
 	bool level_enabled;           /**< Audio level RTP ext. enabled    */
 	bool hold;                    /**< Local hold flag                 */
-	bool conference;              /**< Local conference flag           */
+	RE_ATOMIC bool conference;    /**< Local conference flag           */
 	uint8_t extmap_aulevel;       /**< ID Range 1-14 inclusive         */
 	audio_event_h *eventh;        /**< Event handler                   */
 	audio_level_h *levelh;        /**< Audio level handler             */
@@ -432,6 +429,7 @@ static void poll_aubuf_tx(struct audio *a)
 	auframe_init(&af, tx->src_fmt, tx->sampv, sampc, srate, ch);
 	aubuf_read_auframe(tx->aubuf, &af);
 
+	mtx_lock(tx->mtx);
 	/* Process exactly one audio-frame in list order */
 	for (le = tx->filtl.head; le; le = le->next) {
 		struct aufilt_enc_st *st = le->data;
@@ -439,6 +437,7 @@ static void poll_aubuf_tx(struct audio *a)
 		if (st->af && st->af->ench)
 			err |= st->af->ench(st, &af);
 	}
+	mtx_unlock(tx->mtx);
 	if (err) {
 		warning("audio: aufilter encode: %m\n", err);
 	}
@@ -510,6 +509,16 @@ bool audio_txtelev_empty(const struct audio *au)
 }
 
 
+void audio_call_telev_handler(const struct audio *au, int key, bool end)
+{
+	if (!au)
+		return;
+
+	if (au->eventh)
+		au->eventh(key, end, au->arg);
+}
+
+
 /*
  * Read samples from Audio Source
  *
@@ -550,7 +559,10 @@ static void ausrc_read_handler(struct auframe *af, void *arg)
 	(void)aubuf_write_auframe(tx->aubuf, af);
 
 	mtx_lock(tx->mtx);
-	tx->aubuf_started = true;
+	if (!tx->aubuf_started &&
+	    (aubuf_cur_size(tx->aubuf) >= tx->psize))
+		tx->aubuf_started = true;
+
 	mtx_unlock(tx->mtx);
 
 	if (a->cfg.txmode != AUDIO_MODE_POLL)
@@ -627,7 +639,9 @@ static int stream_pt_handler(uint8_t pt, struct mbuf *mb, void *arg)
  */
 static void stream_recv_handler(const struct rtp_header *hdr,
 				struct rtpext *extv, size_t extc,
-				struct mbuf *mb, unsigned lostc, bool *ignore,
+				struct mbuf *mb, unsigned lostc,
+				bool new_source,
+				bool *ignore,
 				void *arg)
 {
 	struct audio *a = arg;
@@ -636,6 +650,9 @@ static void stream_recv_handler(const struct rtp_header *hdr,
 
 	if (!a->aur)
 		return;
+
+	if (new_source)
+		aurecv_reset(a->aur);
 
 	aurecv_receive(a->aur, hdr, extv, extc, mb, lostc, ignore);
 }
@@ -763,18 +780,6 @@ int audio_alloc(struct audio **ap, struct list *streaml,
 	if (err)
 		goto out;
 
-	if (cfg->audio.level && offerer) {
-
-		a->extmap_aulevel = stream_generate_extmap_id(a->strm);
-		aurecv_set_extmap(a->aur, a->extmap_aulevel);
-
-		err = sdp_media_set_lattr(stream_sdpmedia(a->strm), true,
-					  "extmap",
-					  "%u %s",
-					  a->extmap_aulevel, uri_aulevel);
-		if (err)
-			goto out;
-	}
 
 	tx->mb = mbuf_alloc(STREAM_PRESZ + 4096);
 	tx->sampv = mem_zalloc(AUDIO_SAMPSZ * aufmt_sample_size(tx->enc_fmt),
@@ -818,6 +823,8 @@ int audio_alloc(struct audio **ap, struct list *streaml,
 	if (acc && acc->auplay_mod) {
 		err  = aurecv_set_module(a->aur, acc->auplay_mod);
 		err |= aurecv_set_device(a->aur, acc->auplay_dev);
+		if (err)
+			goto out;
 
 		info("audio: using account specific player: (%s,%s)\n",
 		     acc->auplay_mod, acc->auplay_dev);
@@ -845,6 +852,21 @@ int audio_alloc(struct audio **ap, struct list *streaml,
 		*ap = a;
 
 	return err;
+}
+
+
+int audio_enable_level(struct audio *au)
+{
+	if (!au)
+		return EINVAL;
+
+	au->extmap_aulevel = stream_generate_extmap_id(au->strm);
+	aurecv_set_extmap(au->aur, au->extmap_aulevel);
+
+	return sdp_media_set_lattr(stream_sdpmedia(au->strm), false,
+				   "extmap",
+				   "%u %s",
+				   au->extmap_aulevel, uri_aulevel);
 }
 
 
@@ -984,6 +1006,9 @@ static int aufilt_setup(struct audio *a, struct list *aufiltl)
 		struct aufilt_dec_st *decst = NULL;
 		void *ctx = NULL;
 
+		if (!af->enabled)
+			continue;
+
 		if (af->encupdh && update_enc) {
 			err = af->encupdh(&encst, &ctx, af, &encprm, a);
 			if (err) {
@@ -992,7 +1017,9 @@ static int aufilt_setup(struct audio *a, struct list *aufiltl)
 			}
 			else {
 				encst->af = af;
+				mtx_lock(tx->mtx);
 				list_append(&tx->filtl, &encst->le, encst);
+				mtx_unlock(tx->mtx);
 			}
 		}
 
@@ -1042,20 +1069,20 @@ static int start_source(struct autx *tx, struct audio *a, struct list *ausrcl)
 	/* Start Audio Source */
 	if (!tx->ausrc && ausrc_find(ausrcl, NULL) && !a->hold) {
 
-		struct ausrc_prm prm;
 		size_t sz;
 		size_t psize_alloc;
-
-		prm.srate      = srate_dsp;
-		prm.ch         = channels_dsp;
-		prm.ptime      = tx->ptime;
-		prm.fmt        = tx->src_fmt;
+		struct ausrc_prm prm = {
+			.srate      = srate_dsp,
+			.ch         = channels_dsp,
+			.ptime      = tx->ptime,
+			.fmt        = tx->src_fmt
+		};
 
 		tx->ausrc_prm = prm;
 
 		sz = aufmt_sample_size(tx->src_fmt);
 
-		psize_alloc = sz * calc_nsamp(prm.srate, prm.ch, prm.ptime);
+		psize_alloc = sz * au_calc_nsamp(prm.srate, prm.ch, prm.ptime);
 		tx->psize = psize_alloc;
 		tx->aubuf_maxsz = tx->psize * 30;
 
@@ -1080,7 +1107,7 @@ static int start_source(struct autx *tx, struct audio *a, struct list *ausrcl)
 		/* recalculate and resize aubuf if ausrc_alloc changes prm */
 		tx->src_fmt = prm.fmt;
 		sz = aufmt_sample_size(tx->src_fmt);
-		tx->psize = sz * calc_nsamp(prm.srate, prm.ch, prm.ptime);
+		tx->psize = sz * au_calc_nsamp(prm.srate, prm.ch, prm.ptime);
 		if (psize_alloc != tx->psize) {
 			tx->ausrc_prm = prm;
 			tx->aubuf_maxsz = tx->psize * 30;
@@ -1220,22 +1247,6 @@ int audio_update(struct audio *a)
 	}
 
 	return err;
-}
-
-
-/**
- * This function simply calls audio_update() and kept for backward
- * compatibility
- *
- * @param a Audio object
- *
- * @return 0 if success, otherwise errorcode
- *
- * @deprecated Use audio_update() instead
- */
-int audio_start(struct audio *a)
-{
-	return audio_update(a);
 }
 
 
@@ -1574,7 +1585,7 @@ void audio_sdp_attr_decode(struct audio *a)
 
 				sz = aufmt_sample_size(tx->src_fmt);
 
-				tx->psize = sz * calc_nsamp(tx->ac->srate,
+				tx->psize = sz * au_calc_nsamp(tx->ac->srate,
 							    tx->ac->ch,
 							    ptime_tx);
 			}
@@ -1656,7 +1667,7 @@ int audio_debug(struct re_printf *pf, const struct audio *a)
 	tx = &a->tx;
 	sztx = aufmt_sample_size(tx->src_fmt);
 
-	err  = re_hprintf(pf, "\n--- Audio stream ---\n");
+	err  = re_hprintf(pf, "%s", "\n--- Audio stream ---\n");
 
 	err |= re_hprintf(pf, " tx:   encode: %H ptime=%ums %s\n",
 			  aucodec_print, tx->ac,
@@ -1890,7 +1901,7 @@ int audio_set_conference(struct audio *au, bool conference)
 	if (!au)
 		return EINVAL;
 
-	au->conference = conference;
+	re_atomic_rlx_set(&au->conference, conference);
 
 	return 0;
 }
@@ -1905,7 +1916,7 @@ int audio_set_conference(struct audio *au, bool conference)
  */
 bool audio_is_conference(const struct audio *au)
 {
-	return au ? au->conference : false;
+	return au ? re_atomic_rlx(&au->conference) : false;
 }
 
 

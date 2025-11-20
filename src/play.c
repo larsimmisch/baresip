@@ -41,7 +41,6 @@ struct play {
 #ifndef PREFIX
 #define PREFIX "/usr"
 #endif
-static const char default_play_path[FS_PATH_MAX] = PREFIX "/share/baresip";
 
 
 struct player {
@@ -249,6 +248,10 @@ static int aufile_load(struct mbuf *mb, const char *filename,
 		*channels = prm.channels;
 	}
 
+	if (err)
+		warning("play: could not load %s (%m)\n",
+			filename ? filename : "null", err);
+
 	return err;
 }
 
@@ -303,8 +306,12 @@ int play_tone(struct play **playp, struct player *player,
 	err = auplay_alloc(&play->auplay, baresip_auplayl(),
 			   play_mod, &wprm,
 			   play_dev, write_handler, play);
-	if (err)
+	if (err) {
+		warning("play: could not start auplay %s/%s (%m)\n",
+			play_mod ? play_mod : "-", play_dev ? play_dev : "-",
+			err);
 		goto out;
+       }
 
 	list_append(&player->playl, &play->le, play);
 	tmr_start(&play->tmr, PTIME,  tmr_polling, play);
@@ -333,7 +340,7 @@ static void ausrc_read_handler(struct auframe *af, void *arg)
 
 	err = aubuf_write_auframe(play->aubuf, af);
 	if (err)
-		warning("play: aubuf_write: %m \n", err);
+		warning("play: aubuf_write (%m)\n", err);
 }
 
 
@@ -381,7 +388,8 @@ static int start_ausrc(struct play *play)
 			play->filename,
 			ausrc_read_handler, ausrc_error_handler, play);
 	if (err)
-		warning("play: could not start ausrc (%m)\n", err);
+		warning("play: could not start ausrc for %s (%m)\n",
+			play->filename ? play->filename : "-", err);
 
 	return err;
 }
@@ -401,7 +409,9 @@ static int start_auplay(struct play *play)
 			   play->mod, &wprm,
 			   play->dev, aubuf_write_handler, play);
 	if (err)
-		warning("play: could not start auplay (%m)\n", err);
+		warning("play: could not start auplay %s/%s (%m)\n",
+			play->mod ? play->mod : "-",
+			play->dev ? play->dev : "-", err);
 
 	return err;
 }
@@ -526,17 +536,16 @@ int play_file(struct play **playp, struct player *player,
 	      const char *filename, int repeat,
 	      const char *play_mod, const char *play_dev)
 {
-	char file[FS_PATH_MAX];
-	char path[FS_PATH_MAX];
 	const struct ausrc *ausrc;
 	struct mbuf *mb = NULL;
+	char *file = NULL;
+	char *path = NULL;
+	char *srcn = NULL;
+	struct pl opt;
 	int delay = 0;
 	uint32_t srate = 0;
 	uint8_t ch = 0;
 	struct play *play = NULL;
-
-	char srcn[FS_PATH_MAX];
-
 	int err;
 
 	if (!player)
@@ -544,7 +553,10 @@ int play_file(struct play **playp, struct player *player,
 	if (playp && *playp)
 		return EALREADY;
 
-	str_ncpy(file, filename, sizeof(file));
+	err = re_sdprintf(&file, "%s", filename);
+	if (err)
+		goto out;
+
 	parse_play_settings(file, &repeat, &delay);
 
 	/* absolute path? */
@@ -552,15 +564,21 @@ int play_file(struct play **playp, struct player *player,
 	    !re_regex(file, strlen(file), "https://") ||
 	    !re_regex(file, strlen(file), "http://") ||
 	    !re_regex(file, strlen(file), "file://")) {
-		if (re_snprintf(path, sizeof(path), "%s",
-				file) < 0)
-			return ENOMEM;
-	}
-	else if (re_snprintf(path, sizeof(path), "%s/%s",
-			player->play_path, file) < 0)
-		return ENOMEM;
 
-	if (!conf_get_str(conf_cur(), "file_ausrc", srcn, sizeof(srcn))) {
+		err = re_sdprintf(&path, "%s", file);
+	}
+	else
+		err = re_sdprintf(&path, "%s/%s", player->play_path, file);
+
+	if (err)
+		goto out;
+
+	if (!conf_get(conf_cur(), "file_ausrc", &opt)) {
+
+		err = pl_strdup(&srcn, &opt);
+		if (err)
+			goto out;
+
 		ausrc = ausrc_find(baresip_ausrcl(), srcn);
 		if (ausrc) {
 			err = play_file_ausrc(&play, ausrc,
@@ -572,20 +590,25 @@ int play_file(struct play **playp, struct player *player,
 	}
 
 	mb = mbuf_alloc(1024);
-	if (!mb)
-		return ENOMEM;
-
-	err = aufile_load(mb, path, &srate, &ch);
-	if (err) {
-		warning("play: %s: %m\n", path, err);
+	if (!mb) {
+		err = ENOMEM;
 		goto out;
 	}
+
+	err = aufile_load(mb, path, &srate, &ch);
+	if (err)
+		goto out;
 
 	err = play_tone(&play, player, mb, srate,
 	                ch, repeat, play_mod, play_dev);
 
  out:
 	mem_deref(mb);
+
+	mem_deref(file);
+	mem_deref(path);
+	mem_deref(srcn);
+
 	if (play)
 		play->delay = delay;
 
@@ -646,8 +669,8 @@ int play_init(struct player **playerp)
 
 	list_init(&player->playl);
 
-	str_ncpy(player->play_path, default_play_path,
-		 sizeof(player->play_path));
+	str_ncpy(player->play_path, conf_config()->audio.audio_path,
+			sizeof(player->play_path));
 
 	*playerp = player;
 

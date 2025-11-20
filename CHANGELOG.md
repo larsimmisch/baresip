@@ -5,9 +5,428 @@ All notable changes to baresip will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v3.13.0] - 2024-06-19
+## v4.3.0 - 2025-11-19
 
-## What's Changed
+### What's Changed
+* video: find new encoder if not available by @xiaokuang95 in https://github.com/baresip/baresip/pull/3532
+* video: null pointer checks for codec functions by @cspiel1 in https://github.com/baresip/baresip/pull/3538
+* test/ccheck: ignore reversed list_unlink by @sreimers in https://github.com/baresip/baresip/pull/3546
+* g722: add libg722 module as alternative to avoid spandsp dependency by @fosple in https://github.com/baresip/baresip/pull/3545
+* pulse: return err if unsupported stream by @cspiel1 in https://github.com/baresip/baresip/pull/3554
+* jbuf: update copyright by @alfredh in https://github.com/baresip/baresip/pull/3551
+* jbuf: remove unused jbuf_frames() in API by @alfredh in https://github.com/baresip/baresip/pull/3550
+* rtprecv, aureceiver: fix ssrc re-invite by @Turkish in https://github.com/baresip/baresip/pull/3533
+* test: remove include to menu.h by @cspiel1 in https://github.com/baresip/baresip/pull/3558
+* play: warnings for failed audio devices by @cspiel1 in https://github.com/baresip/baresip/pull/3553
+* account: added account_set_pubint API function by @juha-h in https://github.com/baresip/baresip/pull/3560
+
+### New Contributors
+* @xiaokuang95 made their first contribution in https://github.com/baresip/baresip/pull/3532
+* @fosple made their first contribution in https://github.com/baresip/baresip/pull/3545
+* @Turkish made their first contribution in https://github.com/baresip/baresip/pull/3533
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v4.2.0...v4.3.0
+
+
+## v4.2.0 - 2025-10-15
+
+### What's Changed
+* menu: check return value from str_dup() by @alfredh in https://github.com/baresip/baresip/pull/3495
+* ctrl_dbus: check return value of str_dup() by @alfredh in https://github.com/baresip/baresip/pull/3493
+* core: set bundle rtpext before aulevel by @alfredh in https://github.com/baresip/baresip/pull/3497
+* ice: use icem_rcand_ready by @sreimers in https://github.com/baresip/baresip/pull/3498
+* mpa: move MPA audio codec to baresip-apps by @alfredh in https://github.com/baresip/baresip/pull/3499
+* webrtc_aecm: removed module by @juha-h in https://github.com/baresip/baresip/pull/3500
+* ci-windows: bump choco openssl version to 3.5.3 by @alfredh in https://github.com/baresip/baresip/pull/3503
+* audiounit: remove unused member 'int fmt' by @alfredh in https://github.com/baresip/baresip/pull/3505
+* audiounit: remove 'int ch' already present in struct ausrc_prm by @alfredh in https://github.com/baresip/baresip/pull/3508
+* call,bevent: add call contacturi by @maximilianfridrich in https://github.com/baresip/baresip/pull/3510
+* test/ua: add test_ua_cuser by @maximilianfridrich in https://github.com/baresip/baresip/pull/3511
+* ua: rename setting to sip_cuser_random by @cspiel1 in https://github.com/baresip/baresip/pull/3515
+* menu: fix some typos by @alfredh in https://github.com/baresip/baresip/pull/3512
+* call: send local SDP event not too early by @cspiel1 in https://github.com/baresip/baresip/pull/3516
+* call: call_modify() - local SDP event before SDP encode by @cspiel1 in https://github.com/baresip/baresip/pull/3519
+* test: add test_uag_find_msg() by @cspiel1 in https://github.com/baresip/baresip/pull/3518
+* video: better sendrate and burst_bits defaults by @sreimers in https://github.com/baresip/baresip/pull/3522
+* webrtc_aec: update module to Debian Trixie compatibility by @juha-h in https://github.com/baresip/baresip/pull/3509
+* call: add missing input argument checking (struct call pointer) by @alfredh in https://github.com/baresip/baresip/pull/3513
+* ci,windows: bump Choco to OpenSSL version 3.5.4 by @alfredh in https://github.com/baresip/baresip/pull/3523
+* modules: fix minor typos by @alfredh in https://github.com/baresip/baresip/pull/3525
+* config: remove mpa module from template by @alfredh in https://github.com/baresip/baresip/pull/3524
+* avfilter: fix av_opt_set_int_list deprecation warning by @sreimers in https://github.com/baresip/baresip/pull/3527
+* ci/macos: use default ffmpeg (currently 8.0) by @sreimers in https://github.com/baresip/baresip/pull/3528
+* cmake: fix usage of SPANDSP_HINTS by @cspiel1 in https://github.com/baresip/baresip/pull/3531
+* ci/coverage: increase min. coverage by @sreimers in https://github.com/baresip/baresip/pull/3529
+* bump version number to 4.2.0 by @alfredh in https://github.com/baresip/baresip/pull/3534
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v4.1.0...v4.2.0
+
+
+## v4.1.0 - 2025-09-10
+
+### What's Changed
+
+* package: Fix not working libdir by @danielroedl in https://github.com/baresip/baresip/pull/3455
+* ci: temporary workaround for choco openssl failure by @alfredh in https://github.com/baresip/baresip/pull/3458
+* call: add getter call state name by @cspiel1 in https://github.com/baresip/baresip/pull/3459
+* play: set audio path to config by @cspiel1 in https://github.com/baresip/baresip/pull/3463
+* ci: update actions/checkout@v5 by @sreimers in https://github.com/baresip/baresip/pull/3466
+* audio: avoid tx underruns if ausrc delivers small audio frames by @cspiel1 in https://github.com/baresip/baresip/pull/3472
+* test: ua - event_handler remove unused variables by @cspiel1 in https://github.com/baresip/baresip/pull/3474
+* test: ua - fix index for domain_add by @cspiel1 in https://github.com/baresip/baresip/pull/3475
+* jbuf: adaptive playout time calculation by @sreimers in https://github.com/baresip/baresip/pull/2757
+* config: fix video_jitter_buffer_size and add deprecation warnings by @sreimers in https://github.com/baresip/baresip/pull/3476
+* ua: avoid duplicates of URI params by @cspiel1 in https://github.com/baresip/baresip/pull/3471
+* gst: fix crash on shutdown by @cspiel1 in https://github.com/baresip/baresip/pull/3480
+* ua: avoid suffix for contact user if possible by @cspiel1 in https://github.com/baresip/baresip/pull/3470
+* doc: update jbuf settings in examples by @cspiel1 in https://github.com/baresip/baresip/pull/3481
+* uag: avoid peer-to-peer calls to registered accounts (#3479) by @cspiel1 in https://github.com/baresip/baresip/pull/3482
+* message: log when UA is not found for incoming MESSAGE by @juha-h in https://github.com/baresip/baresip/pull/3486
+* ci/build/macos: use ffmpeg 7 by @sreimers in https://github.com/baresip/baresip/pull/3487
+* test: convert some define values to enum by @alfredh in https://github.com/baresip/baresip/pull/3485
+* readme: update list of platforms and compilers by @alfredh in https://github.com/baresip/baresip/pull/3488
+* test: fix some pylint warnings in ccheck by @alfredh in https://github.com/baresip/baresip/pull/3489
+* jbuf: remove payload type from struct, only set not read by @alfredh in https://github.com/baresip/baresip/pull/3491
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v4.0.0...v4.1.0
+
+
+## v4.0.0 - 2025-08-06
+
+### What's Changed
+
+This major release drops backward wrappers for the old UA-events API. Applications now have to be ported to the new baresip events API. Release v4.0.0 further includes breaking API renaming, code/API cleanup and drops obsolete API functions.
+The breaking changes of re/baresip are listed here: https://github.com/baresip/re/discussions/1372
+
+* bevent: ensure that pointer to call is valid by @cspiel1 in https://github.com/baresip/baresip/pull/3436
+* ebuacip: move to baresip-apps by @alfredh in https://github.com/baresip/baresip/pull/3438
+* net: remove IPv6 check which is no longer needed by @alfredh in https://github.com/baresip/baresip/pull/3439
+* av1: remove backwards definition of AOM_USAGE_REALTIME by @alfredh in https://github.com/baresip/baresip/pull/3440
+* srtp: fix size err printf by @sreimers in https://github.com/baresip/baresip/pull/3441
+* avcodec: remove ifdef AV_CODEC_ID_H265, should be always enabled by @alfredh in https://github.com/baresip/baresip/pull/3443
+* misc: add baresip_version() to get Baresip version string by @alfredh in https://github.com/baresip/baresip/pull/3442
+* docs: update README by @alfredh in https://github.com/baresip/baresip/pull/3444
+* bevent: remove deprecated ua_event API by @cspiel1 in https://github.com/baresip/baresip/pull/3437
+* ctrl_dbus: check return value of mtx_init() by @alfredh in https://github.com/baresip/baresip/pull/3447
+* pulse: use str_ncpy() instead of insecure strcpy() by @alfredh in https://github.com/baresip/baresip/pull/3446
+* av1: use av1_packetize() function instead of wrapper by @alfredh in https://github.com/baresip/baresip/pull/3448
+* enum ua event rename by @cspiel1 in https://github.com/baresip/baresip/pull/3445
+* call: prepare to receive video immediately with 200 Ok by @cspiel1 in https://github.com/baresip/baresip/pull/3449
+* in_band_dtmf: fix cross compiler alignment warning by @cspiel1 in https://github.com/baresip/baresip/pull/3450
+* uri: remove password field by @alfredh in https://github.com/baresip/baresip/pull/3451
+* audio: remove deprecated audio_start by @sreimers in https://github.com/baresip/baresip/pull/3453
+* bevent: remove unused CNT_DEPRECATED_WARNINGS enum by @sreimers in https://github.com/baresip/baresip/pull/3452
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.24.0...v4.0.0
+
+## v3.24.0 - 2025-07-09
+
+### What's Changed
+* test/ccheck: add LIST_FOREACH_SAFE check by @sreimers in https://github.com/baresip/baresip/pull/3412
+* config: removed "rtp_rxmode thread is currently experimental" warning by @juha-h in https://github.com/baresip/baresip/pull/3413
+* gzrtp: increase mbuf size if about to run out by @juha-h in https://github.com/baresip/baresip/pull/3414
+* ci: update mingw.yml by @alfredh in https://github.com/baresip/baresip/pull/3410
+* ci/clang: use clang-20 by @sreimers in https://github.com/baresip/baresip/pull/3416
+* call: Get cancel reason from close message by @KillingSpark in https://github.com/baresip/baresip/pull/3409
+* uuid: check that uuid file contains valid uuid by @maximilianfridrich in https://github.com/baresip/baresip/pull/3426
+* test/jbuf_gnack: add Generic NACK jitterbuffer test by @sreimers in https://github.com/baresip/baresip/pull/3427
+* menu: Add hangup sound on closed calls by @dddaniel in https://github.com/baresip/baresip/pull/3425
+* rtp: use rtp_seq_less by @sreimers in https://github.com/baresip/baresip/pull/3429
+* cmake: sort SRCS in alphabetical order by @sreimers in https://github.com/baresip/baresip/pull/3430
+* aac: fix debug printf (confSize) by @sreimers in https://github.com/baresip/baresip/pull/3432
+* webrtc: init re_trace.json if enabled by @sreimers in https://github.com/baresip/baresip/pull/3434
+* prepare for release -- bump version to 3.24.0 by @alfredh in https://github.com/baresip/baresip/pull/3435
+
+## New Contributors
+* @KillingSpark made their first contribution in https://github.com/baresip/baresip/pull/3409
+* @dddaniel made their first contribution in https://github.com/baresip/baresip/pull/3425
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.23.0...v3.24.0
+
+
+## v3.23.0 - 2025-06-04
+
+### What's Changed
+* conf: initialize conf_obj by @seven1240 in https://github.com/baresip/baresip/pull/3377
+* debug: add siptrace debug cmd by @seven1240 in https://github.com/baresip/baresip/pull/3378
+* avcapture: add macOS screen capture by @seven1240 in https://github.com/baresip/baresip/pull/3379
+* cmake: update cmake_minimum_required to match libre by @alfredh in https://github.com/baresip/baresip/pull/3384
+* ci: upgrade mingw job to OpenSSL 3.5.0 by @alfredh in https://github.com/baresip/baresip/pull/3387
+* ctrl_tcp preload: allow preloading of ctrl_tcp module on baresip command line by @IkerAriz in https://github.com/baresip/baresip/pull/3375
+* test: ASSERT_EQ correct variable in test_call_sni() by @alfredh in https://github.com/baresip/baresip/pull/3388
+* log: update doxygen comments by @alfredh in https://github.com/baresip/baresip/pull/3398
+* call: fix URI encoding in call_connect by @maximilianfridrich in https://github.com/baresip/baresip/pull/3403
+* call: added from-tag and to-tag to Refer-To header in call_replace_transfer by @gordongrech in https://github.com/baresip/baresip/pull/3404
+* 100rel improvements by @maximilianfridrich in https://github.com/baresip/baresip/pull/3402
+
+### New Contributors
+* @seven1240 made their first contribution in https://github.com/baresip/baresip/pull/3377
+* @IkerAriz made their first contribution in https://github.com/baresip/baresip/pull/3375
+* @gordongrech made their first contribution in https://github.com/baresip/baresip/pull/3404
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.22.0...v3.23.0
+
+
+## v3.22.0 - 2025-04-30
+
+### What's Changed
+* play: avoid stack overflow on small devices by @cspiel1 in https://github.com/baresip/baresip/pull/3329
+* portaudio: fixed selecting playback-only devices by name (refs #3330) by @rhaberkorn in https://github.com/baresip/baresip/pull/3331
+* mediadev: fix mediadev_get_default by @sreimers in https://github.com/baresip/baresip/pull/3332
+* menu fix contact media direction by @cspiel1 in https://github.com/baresip/baresip/pull/3334
+* aaudio/recorder: use InputPreset VOICE_COMMUNICATION by @juha-h in https://github.com/baresip/baresip/pull/3336
+* netstring: handle malloc() return NULL (cppcheck) by @alfredh in https://github.com/baresip/baresip/pull/3337
+* aac: fix formatting arguments to %w by @alfredh in https://github.com/baresip/baresip/pull/3342
+* rtprecv: fix debug printf size error by @ursfassler in https://github.com/baresip/baresip/pull/3343
+* audiounit: fix linking by @barracuda156 in https://github.com/baresip/baresip/pull/3346
+* audiounit: add audiounit_ prefix to functions by @alfredh in https://github.com/baresip/baresip/pull/3345
+* audiounit: remove unused variables by @alfredh in https://github.com/baresip/baresip/pull/3348
+* main: update copyright year by @sreimers in https://github.com/baresip/baresip/pull/3351
+* rtprecv: fit logging to file name by @cspiel1 in https://github.com/baresip/baresip/pull/3355
+* evdev: allowing evdev module compilation on FreeBSD by @DenisPolygalov in https://github.com/baresip/baresip/pull/3354
+* cmake/FindOPUS: align include path names by @sreimers in https://github.com/baresip/baresip/pull/3356
+* mixminus: fix info re_printf pointer length by @sreimers in https://github.com/baresip/baresip/pull/3357
+* aureceiver: fix byte length and use audio_recv prefix by @sreimers in https://github.com/baresip/baresip/pull/3358
+* av1: migrate to new AV1 packetizer by @alfredh in https://github.com/baresip/baresip/pull/3362
+* video: fix warning printf size error by @ursfassler in https://github.com/baresip/baresip/pull/3366
+* misc: fix audio tx thread filter locking by @sreimers in https://github.com/baresip/baresip/pull/3365
+* docs: add port to accounts example by @cspiel1 in https://github.com/baresip/baresip/pull/3372
+
+### New Contributors
+* @barracuda156 made their first contribution in https://github.com/baresip/baresip/pull/3346
+* @DenisPolygalov made their first contribution in https://github.com/baresip/baresip/pull/3354
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.21.0...v3.22.0
+
+
+## v3.21.0 - 2025-03-26
+
+### What's Changed
+* call: use call_find_replaces for finding call to replace by @maximilianfridrich in https://github.com/baresip/baresip/pull/3307
+* contact commands by @cspiel1 in https://github.com/baresip/baresip/pull/3295
+* menu: return on UA_EVENT_SIPSESS_CONN by @maximilianfridrich in https://github.com/baresip/baresip/pull/3313
+* recalculate jbuf number of frame after reuse packet by @chucongqing in https://github.com/baresip/baresip/pull/3311
+* pulse: add NULL checks for paconn_get by @maximilianfridrich in https://github.com/baresip/baresip/pull/3317
+* menu: remove CMD_PRM flag from hangup command by @maximilianfridrich in https://github.com/baresip/baresip/pull/3318
+* portaudio: fixed inconsistency between the device specification in audio_source and via /ausrc by @rhaberkorn in https://github.com/baresip/baresip/pull/3276
+* aufile: return 0 instead of err by @alfredh in https://github.com/baresip/baresip/pull/3322
+* aureceiver: cleanup rtpext_find is moved to re by @sreimers in https://github.com/baresip/baresip/pull/3323
+* stream,rtprecv: add rtprecv_set_srate by @sreimers in https://github.com/baresip/baresip/pull/3325
+* call: fix cppcheck warning by @alfredh in https://github.com/baresip/baresip/pull/3326
+* bump version to 3.21.0 by @alfredh in https://github.com/baresip/baresip/pull/3328
+
+### New Contributors
+* @rhaberkorn made their first contribution in https://github.com/baresip/baresip/pull/3276
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.20.0...v3.21.0
+
+
+## v3.20.0 - 2025-02-18
+
+### What's Changed
+* mixausrc: use float instead of double by @alfredh in https://github.com/baresip/baresip/pull/3280
+* misc: refactor _GNU_SOURCE usage by @sreimers in https://github.com/baresip/baresip/pull/3282
+* test: use real objects instead of synthetic pointers by @alfredh in https://github.com/baresip/baresip/pull/3283
+* cmake: fix _GNU_SOURCE definition by @sreimers in https://github.com/baresip/baresip/pull/3285
+* test_call_bundle_base: add TEST_ERR() after each call by @alfredh in https://github.com/baresip/baresip/pull/3284
+* avcapture: fix vidframe init by @sreimers in https://github.com/baresip/baresip/pull/3288
+* test: make test_call_bundle stable by @cspiel1 in https://github.com/baresip/baresip/pull/3287
+* fakevideo: add cast to fix windows warning by @alfredh in https://github.com/baresip/baresip/pull/3291
+* ausine: add cast to fix warning on windows by @alfredh in https://github.com/baresip/baresip/pull/3292
+* auresamp: change type to fix warning on windows by @alfredh in https://github.com/baresip/baresip/pull/3293
+* avformat: init vidframe properly by @chucongqing in https://github.com/baresip/baresip/pull/3290
+* ci: add support for Windows platform by @alfredh in https://github.com/baresip/baresip/pull/3294
+* log: use secure RE_VA_ARGS logging by @sreimers in https://github.com/baresip/baresip/pull/3296
+* aaudio: modifications by @juha-h in https://github.com/baresip/baresip/pull/3297
+* rtprecv: fix info printf size error by @sreimers in https://github.com/baresip/baresip/pull/3299
+* log: refactor safe RE_ARG handling by @sreimers in https://github.com/baresip/baresip/pull/3300
+* av1: use enum values from enum obu_type by @alfredh in https://github.com/baresip/baresip/pull/3301
+* ci/build: fix install aac by @sreimers in https://github.com/baresip/baresip/pull/3302
+* call/call_event_handler: fix possible call NULL deref by @sreimers in https://github.com/baresip/baresip/pull/3305
+
+### New Contributors
+* @chucongqing made their first contribution in https://github.com/baresip/baresip/pull/3290
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.19.0...v3.20.0
+
+
+## v3.19.0 - 2025-01-15
+
+### What's Changed
+* ua: hide credentials in CREATE event by @cspiel1 in https://github.com/baresip/baresip/pull/3239
+* menu: add scode and reason arguments to hangup command by @maximilianfridrich in https://github.com/baresip/baresip/pull/3238
+* ua prevent double call accept by @cspiel1 in https://github.com/baresip/baresip/pull/3236
+* bevent: fix encode bevent without display name by @cspiel1 in https://github.com/baresip/baresip/pull/3244
+* ua: fix logging copy paste mistake by @cspiel1 in https://github.com/baresip/baresip/pull/3249
+* misc: Static code analysis fixes by @maximilianfridrich in https://github.com/baresip/baresip/pull/3252
+* menu/dynamic_menu: add argument to mute command by @maximilianfridrich in https://github.com/baresip/baresip/pull/3250
+* ci,misc: add clang-analyze and fix warnings by @sreimers in https://github.com/baresip/baresip/pull/3254
+* audio: use au_calc_nsamp() with au_ prefix by @alfredh in https://github.com/baresip/baresip/pull/3257
+* ci: add selftest to build by @alfredh in https://github.com/baresip/baresip/pull/3256
+* ci/fedora: synchronize packages with spec file from Fedora 42 by @robert-scheck in https://github.com/baresip/baresip/pull/3261
+* copyright: happy new year 2025 by @sreimers in https://github.com/baresip/baresip/pull/3262
+* debian: replace with CPack DEB generator by @sreimers in https://github.com/baresip/baresip/pull/3263
+* config: use designated initializers by @sreimers in https://github.com/baresip/baresip/pull/3260
+* menu/static_menu: fix hangup SEGV by @maximilianfridrich in https://github.com/baresip/baresip/pull/3264
+* cmake: update min requirement and use range by @sreimers in https://github.com/baresip/baresip/pull/3265
+* video: initialize vidframe properly by @sreimers in https://github.com/baresip/baresip/pull/3268
+* ci/coverage: use ubuntu-22.04 by @sreimers in https://github.com/baresip/baresip/pull/3271
+* vidinfo: avoid use of floating numbers by @alfredh in https://github.com/baresip/baresip/pull/3270
+* in_band_dtmf: avoid floating point in calculation by @alfredh in https://github.com/baresip/baresip/pull/3272
+* test: call - print info if call bundle test fails by @cspiel1 in https://github.com/baresip/baresip/pull/3279
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.18.0...v3.19.0
+
+
+## v3.18.0 - 2024-12-11
+
+### What's Changed
+* cmake: fix clang 19 c23 extension warnings by @sreimers in https://github.com/baresip/baresip/pull/3189
+* cmake: install logo.png and *.wav files again (fixes #3191) by @robert-scheck in https://github.com/baresip/baresip/pull/3194
+* menu dnd event by @cspiel1 in https://github.com/baresip/baresip/pull/3186
+* ci/build: use GCC 14 on Ubuntu 24.04 by @robert-scheck in https://github.com/baresip/baresip/pull/3193
+* ci/fedora: adapt workflow for RPM 4.20 in Fedora 41 (fixes #3183) by @robert-scheck in https://github.com/baresip/baresip/pull/3192
+* test: disable test_call_webrtc in thread mode by @alfredh in https://github.com/baresip/baresip/pull/3190
+* debian: release v3.17.1 by @sreimers in https://github.com/baresip/baresip/pull/3195
+* ci/mingw: use ubuntu-24.04 and bump openssl by @sreimers in https://github.com/baresip/baresip/pull/3196
+* menu: fix 302 Moved Temporarily redirect call by @cspiel1 in https://github.com/baresip/baresip/pull/3198
+* core: remove obsolete dnd flag by @cspiel1 in https://github.com/baresip/baresip/pull/3200
+* wasapi: Add WASAPI Audio module by @sreimers in https://github.com/baresip/baresip/pull/3165
+* menu: a config flag for SIP MESSAGE tone by @cspiel1 in https://github.com/baresip/baresip/pull/3203
+* mixausrc: fixing some type conversion warnings (MSVC) by @sreimers in https://github.com/baresip/baresip/pull/3205
+* winwave: remove (replaced by WASAPI module) by @sreimers in https://github.com/baresip/baresip/pull/3204
+* pulse: use default string as default device by @sreimers in https://github.com/baresip/baresip/pull/3206
+* mixausrc: reset mixstatus ptime if ptime changes by @maximilianfridrich in https://github.com/baresip/baresip/pull/3216
+* bevent: Add local URI information to events by @mrkiko in https://github.com/baresip/baresip/pull/3217
+* ua: update doxygen comment by @alfredh in https://github.com/baresip/baresip/pull/3218
+* AAudio module by @juha-h in https://github.com/baresip/baresip/pull/3208
+* wasapi/src: increase record buffer size by @sreimers in https://github.com/baresip/baresip/pull/3221
+* ua,call: add API for rejecting incoming call by @cspiel1 in https://github.com/baresip/baresip/pull/3228
+* video: add picture update bool to vidpacket by @maximilianfridrich in https://github.com/baresip/baresip/pull/3227
+* video: allow RTCP FIR packets as payload-specific feedback by @maximilianfridrich in https://github.com/baresip/baresip/pull/3230
+* cmake: fix APPLE RPATH workaround by @sreimers in https://github.com/baresip/baresip/pull/3232
+* readme: sync with wiki by @alfredh in https://github.com/baresip/baresip/pull/3241
+* bump version to 3.18.0 by @alfredh in https://github.com/baresip/baresip/pull/3243
+
+### New Contributors
+* @mrkiko made their first contribution in https://github.com/baresip/baresip/pull/3217
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.17.0...v3.18.0
+
+
+## v3.17.0 - 2024-11-06
+
+### What's Changed
+* conf: use str_dup for conf_path_set by @sreimers in https://github.com/baresip/baresip/pull/3150
+* menu: fix early audio limit for video less call by @cspiel1 in https://github.com/baresip/baresip/pull/3152
+* jbuf: add video generic NACK support by @sreimers in https://github.com/baresip/baresip/pull/3154
+* rtprecv: remove obsolete code by @sreimers in https://github.com/baresip/baresip/pull/3156
+* mediatrack: decode sdp attributes for audio by @alfredh in https://github.com/baresip/baresip/pull/3161
+* avcodec: remove swresample from list of packages by @alfredh in https://github.com/baresip/baresip/pull/3159
+* bevent: avoid deprecated warnings in selftest by @cspiel1 in https://github.com/baresip/baresip/pull/3163
+* test: rename bevent tests to match module api by @alfredh in https://github.com/baresip/baresip/pull/3168
+* conf: remove conf_get_float by @juha-h in https://github.com/baresip/baresip/pull/3169
+* GTK added standalone main window by @mbattista in https://github.com/baresip/baresip/pull/3127
+* augain: add audio volume filter module by @juha-h in https://github.com/baresip/baresip/pull/3166
+* test/call.c: test_call_sni: silence warnings by @maximilianfridrich in https://github.com/baresip/baresip/pull/3173
+* v4l2/cmake: exclude from WIN32 by @sreimers in https://github.com/baresip/baresip/pull/3174
+* ci/build: upgrade to ubuntu 24.04 by @alfredh in https://github.com/baresip/baresip/pull/3172
+* test: enable RTP/RTCP multiplexing for test_call_webrtc by @alfredh in https://github.com/baresip/baresip/pull/3178
+* webrtc_aecm: added -Wno-missing-field-initializers compile option by @juha-h in https://github.com/baresip/baresip/pull/3177
+* audio: fix variadic macro warning of clang by @cspiel1 in https://github.com/baresip/baresip/pull/3181
+* test/call: add test_call_cancel by @maximilianfridrich in https://github.com/baresip/baresip/pull/3180
+* ci/fedora: Use Fedora 40 until CI is updated for Fedora 41 by @robert-scheck in https://github.com/baresip/baresip/pull/3184
+* dtls_srtp: use struct udp_sock for socket type (ref #3175) by @alfredh in https://github.com/baresip/baresip/pull/3182
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.16.0...v3.17.0
+
+
+## v3.16.0 - 2024-08-28
+
+### What's Changed
+* ua,menu: do not accept call by default by @cspiel1 in https://github.com/baresip/baresip/pull/3123
+* call: fix emitting of call and ua events by @maximilianfridrich in https://github.com/baresip/baresip/pull/3133
+* ausrc, aufile, gst, debug_cmd: rework on ausrc duration retrieval by @cspiel1 in https://github.com/baresip/baresip/pull/3105
+* ua: doxygen for ua_accept() by @cspiel1 in https://github.com/baresip/baresip/pull/3139
+* audio: initialize ausrc_prm by @cspiel1 in https://github.com/baresip/baresip/pull/3138
+* sndfile: module_event from main thread by @cspiel1 in https://github.com/baresip/baresip/pull/3141
+* jack: add jack_server_name config by @sreimers in https://github.com/baresip/baresip/pull/3143
+* bevent: move dnd to menu by @cspiel1 in https://github.com/baresip/baresip/pull/3140
+* call: a getter for local media directions by @cspiel1 in https://github.com/baresip/baresip/pull/3147
+* menu: stop event processing on DnD by @cspiel1 in https://github.com/baresip/baresip/pull/3148
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.15.0...v3.16.0
+
+
+## v3.15.0 - 2024-08-28
+
+### What's Changed
+* audiounit: remove deprecated iOS session handling by @sreimers in https://github.com/baresip/baresip/pull/3083
+* audiounit/cmake: use CMAKE_HOST_SYSTEM_NAME by @sreimers in https://github.com/baresip/baresip/pull/3086
+* add filter_registrar option by @maximilianfridrich in https://github.com/baresip/baresip/pull/3080
+* feature: in-band dtmf detection and generation by @marcel-behlau-elfin in https://github.com/baresip/baresip/pull/3072
+* gst: fix potential SEGVs in error cases by @maximilianfridrich in https://github.com/baresip/baresip/pull/3091
+* test/call: fix SNI selftest by @maximilianfridrich in https://github.com/baresip/baresip/pull/3092
+* ice: fix crash during ICE on fast disconnect by @paresy in https://github.com/baresip/baresip/pull/3093
+* test/call: set global certificate again in SNI test by @maximilianfridrich in https://github.com/baresip/baresip/pull/3094
+* uag: match transport and af when finding ua for msg by @maximilianfridrich in https://github.com/baresip/baresip/pull/3096
+* bevent: add core bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3090
+* aureceiver: set aubuf id by @sreimers in https://github.com/baresip/baresip/pull/3097
+* sip/transp: add client certificate to all TLS transports by @maximilianfridrich in https://github.com/baresip/baresip/pull/3095
+* aufilt: add aufilt_enable by @sreimers in https://github.com/baresip/baresip/pull/3098
+* account: add set audio devices by @sreimers in https://github.com/baresip/baresip/pull/3099
+* bevent: add backwards wrappers by @cspiel1 in https://github.com/baresip/baresip/pull/3100
+* sndfile: add close file module events by @sreimers in https://github.com/baresip/baresip/pull/3101
+* aufile: fixes for prm->duration by @cspiel1 in https://github.com/baresip/baresip/pull/3102
+* account specific video source and display by @paresy in https://github.com/baresip/baresip/pull/3104
+* ua: remove all matching headers when calling ua_rm_custom_hdr by @maximilianfridrich in https://github.com/baresip/baresip/pull/3122
+* bevent: update function calls in src by @cspiel1 in https://github.com/baresip/baresip/pull/3106
+* test: use bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3107
+* menu: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3108
+* ctrl_dbus: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3109
+* ctrl_tcp: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3110
+* echo: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3111
+* gtk: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3112
+* mqtt: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3113
+* ebuacip: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3118
+* serreg: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3117
+* rtcpsummary: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3116
+* presence: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3115
+* mwi: use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3114
+* presence: publisher - use new bevent API by @cspiel1 in https://github.com/baresip/baresip/pull/3124
+* bevent: fix typo in deprecated warning by @cspiel1 in https://github.com/baresip/baresip/pull/3130
+* mwi: use bevent_ua_emit() by @cspiel1 in https://github.com/baresip/baresip/pull/3131
+* menu: use new bevent_call_emit() by @cspiel1 in https://github.com/baresip/baresip/pull/3132
+* version 3.15.0 by @alfredh in https://github.com/baresip/baresip/pull/3134
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.14.0...v3.15.0
+
+
+## v3.14.0 - 2024-07-23
+
+### What's Changed
+* Add .vscode to .gitignore (cosmetic change) by @larsimmisch in https://github.com/baresip/baresip/pull/3071
+* mediatrack: fix audio_start_source aufiltl setup order by @sreimers in https://github.com/baresip/baresip/pull/3074
+* mixausrc: minor fixes by @marcel-behlau-elfin in https://github.com/baresip/baresip/pull/3073
+* srtp: Fix base64 key decoding for AEAD_AES_256_GCM by @weili-jiang in https://github.com/baresip/baresip/pull/3079
+* .clangd: suppress -Wgnu-zero-variadic-macro-arguments by @maximilianfridrich in https://github.com/baresip/baresip/pull/3078
+* test: add TLS SNI selftest by @maximilianfridrich in https://github.com/baresip/baresip/pull/3077
+* portaudio: add hostApi name prefix to mediadev by @sreimers in https://github.com/baresip/baresip/pull/3081
+* call: fix return value in call_progress_dir() by @alfredh in https://github.com/baresip/baresip/pull/3082
+* pipewire: lock loop while starting and registry scan by @cspiel1 in https://github.com/baresip/baresip/pull/3084
+
+
+**Full Changelog**: https://github.com/baresip/baresip/compare/v3.13.0...v3.14.0
+
+
+## v3.13.0 - 2024-06-19
+
+### What's Changed
 * ua: simplify sdp_connection() by @alfredh in https://github.com/baresip/baresip/pull/3031
 * call.c: allow INFO requests with no body by @maximilianfridrich in https://github.com/baresip/baresip/pull/3035
 * audio,stream: video only call if no common audio codecs by @cspiel1 in https://github.com/baresip/baresip/pull/3037
@@ -33,7 +452,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * test: call - reset max_calls to default value by @cspiel1 in https://github.com/baresip/baresip/pull/3067
 * test/ua: disable dns cache for reg_dns tests by @cspiel1 in https://github.com/baresip/baresip/pull/3068
 
-## New Contributors
+### New Contributors
 * @marcel-behlau-elfin made their first contribution in https://github.com/baresip/baresip/pull/3048
 
 **Full Changelog**: https://github.com/baresip/baresip/compare/v3.12.0...v3.13.0
@@ -41,7 +460,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 3.12.0 - 2024-05-15
 
-## What's Changed
+### What's Changed
 * video: stream enable/disable for re-INVITE/UPDATE by @cspiel1 in https://github.com/baresip/baresip/pull/2982
 * srtp: allow rekeying of running streams by @cHuberCoffee in https://github.com/baresip/baresip/pull/2975
 * audio: remove stop_aur() by @cspiel1 in https://github.com/baresip/baresip/pull/2991

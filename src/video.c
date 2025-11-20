@@ -93,6 +93,7 @@ struct vtx {
 	unsigned skipc;                    /**< Number of frames skipped  */
 	struct list filtl;                 /**< Filters in encoding order */
 	enum vidfmt fmt;                   /**< Outgoing pixel format     */
+	char module[128];                  /**< Source module name        */
 	char device[128];                  /**< Source device name        */
 	uint32_t ts_offset;                /**< Random timestamp offset   */
 	bool picup;                        /**< Send picture update       */
@@ -140,6 +141,7 @@ struct vrx {
 	struct vidsz size;                 /**< Incoming video resolution */
 	enum vidfmt fmt;                   /**< Incoming pixel format     */
 	enum vidorient orient;             /**< Display orientation       */
+	char module[128];                  /**< Display module name       */
 	char device[128];                  /**< Display device name       */
 	int pt_rx;                         /**< Incoming RTP payload type */
 	int frames;                        /**< Number of frames received */
@@ -390,6 +392,7 @@ static void encode_rtp_send(struct vtx *vtx, struct vidframe *frame,
 		mtx_lock(vtx->lock_enc);
 
 		if (vtx->vc && vtx->vc->packetizeh) {
+			packet->picup = vtx->picup;
 			err = vtx->vc->packetizeh(vtx->enc, packet);
 			if (err)
 				goto out;
@@ -516,15 +519,20 @@ static int vtx_thread(void *arg)
 	uint64_t start_jfs  = tmr_jiffies_usec();
 	uint64_t target_jfs = tmr_jiffies_usec();
 	uint32_t bitrate;
+	uint32_t burst_bits;
 
 	if (vtx->video->cfg.send_bitrate)
 		bitrate = vtx->video->cfg.send_bitrate;
 	else
-		bitrate = vtx->video->cfg.bitrate;
+		bitrate = (uint32_t)(vtx->video->cfg.bitrate * 1.1);
+
+	if (vtx->video->cfg.burst_bits)
+		burst_bits = vtx->video->cfg.burst_bits;
+	else
+		burst_bits = bitrate / 10;
 
 	const uint64_t max_delay = PKT_SIZE * 8 * 1000000LL / bitrate + 1;
-	const uint64_t max_burst =
-		vtx->video->cfg.burst_bits * 1000000LL / bitrate;
+	const uint64_t max_burst = burst_bits * 1000000LL / bitrate;
 
 	struct vidqent *qent = NULL;
 	struct mbuf *mbd;
@@ -616,6 +624,7 @@ static int vtx_alloc(struct vtx *vtx, struct video *video)
 	/* The initial value of the timestamp SHOULD be random */
 	vtx->ts_offset = rand_u16();
 
+	str_ncpy(vtx->module, video->cfg.src_mod, sizeof(vtx->module));
 	str_ncpy(vtx->device, video->cfg.src_dev, sizeof(vtx->device));
 
 	vtx->fmt = (enum vidfmt)-1;
@@ -636,6 +645,7 @@ static int vrx_alloc(struct vrx *vrx, struct video *video)
 	vrx->pt_rx  = -1;
 	vrx->orient = VIDORIENT_PORTRAIT;
 
+	str_ncpy(vrx->module, video->cfg.disp_mod, sizeof(vrx->module));
 	str_ncpy(vrx->device, video->cfg.disp_dev, sizeof(vrx->device));
 
 	vrx->fmt = (enum vidfmt)-1;
@@ -727,12 +737,6 @@ static void update_rtp_timestamp(struct timestamp_recv *tsr, uint32_t rtp_ts)
 }
 
 
-static void vidframe_clear(struct vidframe *frame)
-{
-	frame->data[0] = NULL;
-}
-
-
 /**
  * Decode incoming RTP packets using the Video decoder
  *
@@ -749,7 +753,8 @@ static int video_stream_decode(struct vrx *vrx, const struct rtp_header *hdr,
 {
 	struct video *v = vrx->video;
 	struct vidframe *frame_filt = NULL;
-	struct vidframe frame_store, *frame = &frame_store;
+	struct vidframe frame_store = {.data[0] = NULL};
+	struct vidframe *frame = &frame_store;
 	struct viddec_packet pkt = {.mb = mb, .hdr = hdr};
 	struct le *le;
 	int err = 0;
@@ -772,14 +777,12 @@ static int video_stream_decode(struct vrx *vrx, const struct rtp_header *hdr,
 			  timestamp_calc_extended(vrx->ts_recv.num_wraps,
 						  vrx->ts_recv.last));
 
-	vidframe_clear(frame);
-
 	err = vrx->vc->dech(vrx->dec, frame, &pkt);
 	if (err) {
 
 		if (err != EPROTO) {
 			warning("video: %s decode error"
-				" (seq=%u, %u bytes): %m\n",
+				" (seq=%u, %zu bytes): %m\n",
 				vrx->vc->name, hdr->seq,
 				mbuf_get_left(mb), err);
 		}
@@ -884,12 +887,15 @@ static int stream_pt_handler(uint8_t pt, struct mbuf *mb, void *arg)
 /* Handle incoming stream data from the network */
 static void stream_recv_handler(const struct rtp_header *hdr,
 				struct rtpext *extv, size_t extc,
-				struct mbuf *mb, unsigned lostc, bool *ignore,
+				struct mbuf *mb, unsigned lostc,
+				bool new_source,
+				bool *ignore,
 				void *arg)
 {
 	struct video *v = arg;
 	(void)extv;
 	(void)extc;
+	(void)new_source;
 	(void)ignore;
 
 	MAGIC_CHECK(v);
@@ -906,7 +912,7 @@ static void rtcp_nack_handler(struct vtx *vtx, struct rtcp_msg *msg)
 {
 	uint16_t nack_pid;
 	uint16_t nack_blp;
-	uint16_t pids[NACK_BLPSZ + 1];
+	uint16_t pids[NACK_BLPSZ + 1] = {0};
 	struct le *le;
 
 	if (!msg || msg->hdr.count != RTCP_RTPFB_GNACK ||
@@ -964,13 +970,18 @@ static void rtcp_handler(struct stream *strm, struct rtcp_msg *msg, void *arg)
 
 	case RTCP_FIR:
 		mtx_lock(vtx->lock_enc);
+		debug("video: recv Full Intra Request (FIR)\n");
 		vtx->picup = true;
 		mtx_unlock(vtx->lock_enc);
 		break;
 
 	case RTCP_PSFB:
-		if (msg->hdr.count == RTCP_PSFB_PLI) {
-			debug("video: recv Picture Loss Indication (PLI)\n");
+		if (msg->hdr.count == RTCP_PSFB_PLI ||
+		    msg->hdr.count == RTCP_PSFB_FIR) {
+			const char *s = msg->hdr.count == RTCP_PSFB_PLI ?
+				"Picture Loss Indication (PLI)" :
+				"Full Intra Request (FIR)";
+			debug("video: recv %s\n", s);
 			mtx_lock(vtx->lock_enc);
 			vtx->picup = true;
 			mtx_unlock(vtx->lock_enc);
@@ -1050,6 +1061,7 @@ static int vrx_print_pipeline(struct re_printf *pf, const struct vrx *vrx)
  * @param streaml    List of streams
  * @param stream_prm Stream parameters
  * @param cfg        Global configuration
+ * @param acc        Account (optional)
  * @param sdp_sess   SDP Session
  * @param mnat       Media NAT (optional)
  * @param mnat_sess  Media NAT session (optional)
@@ -1067,6 +1079,7 @@ static int vrx_print_pipeline(struct re_printf *pf, const struct vrx *vrx)
 int video_alloc(struct video **vp, struct list *streaml,
 		const struct stream_param *stream_prm,
 		const struct config *cfg,
+		const struct account *acc,
 		struct sdp_session *sdp_sess,
 		const struct mnat *mnat, struct mnat_sess *mnat_sess,
 		const struct menc *menc, struct menc_sess *menc_sess,
@@ -1094,6 +1107,26 @@ int video_alloc(struct video **vp, struct list *streaml,
 	err |= vrx_alloc(&v->vrx, v);
 	if (err)
 		goto out;
+
+	if (acc && acc->vidsrc_mod) {
+		str_ncpy(v->vtx.module, acc->vidsrc_mod,
+			sizeof(v->vtx.module));
+		str_ncpy(v->vtx.device, acc->vidsrc_dev,
+			sizeof(v->vtx.device));
+
+		info("video: using account specific source: (%s,%s)\n",
+			acc->vidsrc_mod, acc->vidsrc_dev);
+	}
+
+	if (acc && acc->viddisp_mod) {
+		str_ncpy(v->vrx.module, acc->viddisp_mod,
+			sizeof(v->vrx.module));
+		str_ncpy(v->vrx.device, acc->viddisp_dev,
+			sizeof(v->vrx.device));
+
+		info("video: using account specific display: (%s,%s)\n",
+			acc->viddisp_mod, acc->viddisp_dev);
+	}
 
 	mem_destructor(v, video_destructor);
 
@@ -1208,7 +1241,7 @@ static int set_vidisp(struct vrx *vrx)
 	vrx->vidisp_prm.fullscreen = vrx->video->cfg.fullscreen;
 
 	vd = (struct vidisp *)vidisp_find(baresip_vidispl(),
-					  vrx->video->cfg.disp_mod);
+					  vrx->module);
 	if (!vd)
 		return ENOENT;
 
@@ -1334,7 +1367,7 @@ int video_start_source(struct video *v)
 
 	struct vtx *vtx = &v->vtx;
 
-	debug("video: start source\n");
+	debug("video: start source %s,%s\n", vtx->module, vtx->device);
 
 	if (vidsrc_find(baresip_vidsrcl(), NULL)) {
 		struct vidsrc *vs;
@@ -1554,9 +1587,20 @@ int video_encoder_set(struct video *v, struct vidcodec *vc,
 
 	vtx = &v->vtx;
 
-	if (!vc->encupdh) {
+	if (!vc->encupdh || !vc->ench) {
 		info("video: vidcodec '%s' has no encoder\n", vc->name);
-		return ENOENT;
+
+		struct list *vidcodecl = vc->le.list;
+
+		struct vidcodec *vcd = (struct vidcodec *)
+			vidcodec_find_encoder(vidcodecl, vc->name);
+		if (!vcd) {
+			warning("video: could not find encoder (%s)\n",
+				vc->name);
+			return ENOENT;
+		}
+
+		vc = vcd;
 	}
 
 	mtx_lock(vtx->lock_enc);
@@ -1603,14 +1647,13 @@ int video_decoder_set(struct video *v, struct vidcodec *vc, int pt_rx,
 		return EINVAL;
 
 	/* handle vidcodecs without a decoder */
-	if (!vc->decupdh) {
+	if (!vc->decupdh || !vc->dech) {
 		struct list *vidcodecl = vc->le.list;
-		struct vidcodec *vcd;
 
 		info("video: vidcodec '%s' has no decoder\n", vc->name);
 
-		vcd = (struct vidcodec *)vidcodec_find_decoder(vidcodecl,
-							       vc->name);
+		struct vidcodec *vcd = (struct vidcodec *)
+			vidcodec_find_decoder(vidcodecl, vc->name);
 		if (!vcd) {
 			warning("video: could not find decoder (%s)\n",
 				vc->name);

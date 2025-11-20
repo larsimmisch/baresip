@@ -355,8 +355,8 @@ static void mixstatus_init(struct mixstatus *st, struct aufilt_prm *prm)
 	stop_ausrc(st);
 
 	st->mode = FM_IDLE;
-	st->minvol = 1.;
-	st->ausvol = 1.;
+	st->minvol = 1.0f;
+	st->ausvol = 1.0f;
 	st->i_fade = 0;
 
 	/* initialize with configured values */
@@ -440,27 +440,26 @@ static float fade_linear(struct mixstatus *st, enum mixmode dir)
 	++st->i_fade;
 
 	if (dir == FM_FADEIN)
-		return (st->minvol + factor) > 1. ? 1. : st->minvol + factor;
+		return (st->minvol + factor) > 1.0f ? 1.0f
+						    : st->minvol + factor;
 	else
-		return (1. - factor) < st->minvol ? st->minvol : 1. - factor;
+		return (1.0f - factor) < st->minvol ? st->minvol
+						    : 1.0f - factor;
 }
 
 
-static void fade_int16(struct mixstatus *st, int16_t *data, uint16_t n,
+static void fade_int16(struct mixstatus *st, int16_t *data, size_t n,
 	enum mixmode dir)
 {
-	uint16_t i;
-	for (i = 0; (i < n) && (st->i_fade < st->n_fade); ++i) {
-		data[i] *= fade_linear(st, dir);
-	}
+	for (size_t i = 0; (i < n) && (st->i_fade < st->n_fade); ++i)
+		data[i] = (int16_t)(data[i] * fade_linear(st, dir));
 }
 
 
-static void fade_float(struct mixstatus *st, float *data, uint16_t n,
+static void fade_float(struct mixstatus *st, float *data, size_t n,
 	enum mixmode dir)
 {
-	uint16_t i;
-	for (i = 0; (i < n) && (st->i_fade < st->n_fade); ++i)
+	for (size_t i = 0; (i < n) && (st->i_fade < st->n_fade); ++i)
 		data[i] *= fade_linear(st, dir);
 }
 
@@ -479,18 +478,16 @@ static int fadeframe(struct mixstatus *st, struct auframe *af,
 }
 
 
-static void clear_int16(struct mixstatus *st, int16_t *data, uint16_t n)
+static void clear_int16(struct mixstatus *st, int16_t *data, size_t n)
 {
-	uint16_t i;
-	for (i = 0; i < n; ++i)
-		data[i] *= st->minvol;
+	for (size_t i = 0; i < n; ++i)
+		data[i] = (int16_t)(data[i] * st->minvol);
 }
 
 
-static void clear_float(struct mixstatus *st, float *data, uint16_t n)
+static void clear_float(struct mixstatus *st, float *data, size_t n)
 {
-	uint16_t i;
-	for (i = 0; i < n; ++i)
+	for (size_t i = 0; i < n; ++i)
 		data[i] *= st->minvol;
 }
 
@@ -562,6 +559,7 @@ static int process(struct mixstatus *st, struct auframe *af)
 		warning("mixausrc: ptime changed %u --> %u.\n",
 			st->ptime, ptime);
 		stop_ausrc(st);
+		st->ptime = 0;
 		st->nextmode = FM_FADEIN;
 		return EINVAL;
 	}
@@ -716,11 +714,11 @@ static int start_process(struct mixstatus* st, const char *name,
 		return err;
 
 	/* Fading arguments */
-	st->minvol = pl_isset(&pl3) ? conv_volume(&pl3) : 0.;
-	st->ausvol = pl_isset(&pl4) ? conv_volume(&pl4) : 1.;
+	st->minvol = pl_isset(&pl3) ? conv_volume(&pl3) : 0.0f;
+	st->ausvol = pl_isset(&pl4) ? conv_volume(&pl4) : 1.0f;
 	st->i_fade = 0;
 	st->n_fade = (DEFAULT_FADE_TIME * st->ausrc_prm.srate) / 1000;
-	st->delta_fade = (1.0 - st->minvol) / st->n_fade;
+	st->delta_fade = (1.0f - st->minvol) / st->n_fade;
 
 	stop_ausrc(st);
 	ausrc_prm_aufilt(&st->ausrc_prm, &st->prm);
@@ -835,7 +833,7 @@ static int enc_mix_stop(struct re_printf *pf, void *unused)
 	(void)pf;
 	(void)unused;
 
-	if (!list_count(&decs))
+	if (!list_count(&encs))
 		return EINVAL;
 
 	enc = encs.head->data;
@@ -869,9 +867,11 @@ static int dec_mix_stop(struct re_printf *pf, void *unused)
 }
 
 
-static struct aufilt mixausrc = {
-	LE_INIT, "mixausrc", encode_update, encode, decode_update, decode
-};
+static struct aufilt mixausrc = {.name	  = "mixausrc",
+				 .encupdh = encode_update,
+				 .ench	  = encode,
+				 .decupdh = decode_update,
+				 .dech	  = decode};
 
 
 static int module_init(void)

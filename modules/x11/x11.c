@@ -4,7 +4,6 @@
  * Copyright (C) 2010 Alfred E. Heggestad
  */
 
-#define _XOPEN_SOURCE 1
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <sys/ipc.h>
@@ -126,7 +125,7 @@ static int create_window(struct vidisp_st *st, const struct vidsz *sz)
 
 #ifdef DO_REDIRECT
 	/*
-	 * set override rediect to avoid the "kill window" button
+	 * set override redirect to avoid the "kill window" button
 	 *  we need to set masks to allow for mouse tracking, etc.
 	 *  to control the window - making us the window manager
 	 */

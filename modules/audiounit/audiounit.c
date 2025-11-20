@@ -27,9 +27,8 @@ struct conv_buf {
 	uint32_t nb_frames;
 };
 
-
-AudioComponent audiounit_io = NULL;
-AudioComponent audiounit_conv = NULL;
+AudioComponent audiounit_comp_io;
+AudioComponent audiounit_comp_conv;
 
 static struct auplay *auplay;
 static struct ausrc *ausrc;
@@ -44,7 +43,7 @@ static void conv_buf_destructor(void *arg)
 }
 
 
-int conv_buf_alloc(struct conv_buf **bufp, size_t framesz)
+int audiounit_conv_buf_alloc(struct conv_buf **bufp, size_t framesz)
 {
 	struct conv_buf *buf;
 
@@ -66,7 +65,7 @@ int conv_buf_alloc(struct conv_buf **bufp, size_t framesz)
 }
 
 
-int  get_nb_frames(struct conv_buf *buf, uint32_t *nb_frames)
+int  audiounit_get_nb_frames(struct conv_buf *buf, uint32_t *nb_frames)
 {
 	if (!buf)
 		return EINVAL;
@@ -134,38 +133,11 @@ uint32_t audiounit_aufmt_to_formatflags(enum aufmt fmt)
 }
 
 
-#if TARGET_OS_IPHONE
-static void interruptionListener(void *data, UInt32 inInterruptionState)
-{
-	(void)data;
-
-	if (inInterruptionState == kAudioSessionBeginInterruption) {
-		info("audiounit: interrupt Begin\n");
-		audiosess_interrupt(true);
-	}
-	else if (inInterruptionState == kAudioSessionEndInterruption) {
-		info("audiounit: interrupt End\n");
-		audiosess_interrupt(false);
-	}
-}
-#endif
-
-
 static int module_init(void)
 {
 	AudioComponentDescription desc;
 	CFStringRef name = NULL;
 	int err;
-
-#if TARGET_OS_IPHONE
-	OSStatus ret;
-
-	ret = AudioSessionInitialize(NULL, NULL, interruptionListener, 0);
-	if (ret && ret != kAudioSessionAlreadyInitialized) {
-		warning("audiounit: AudioSessionInitialize: %d\n", ret);
-		return ENODEV;
-	}
-#endif
 
 	desc.componentType = kAudioUnitType_Output;
 #if TARGET_OS_IPHONE

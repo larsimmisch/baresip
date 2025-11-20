@@ -221,7 +221,7 @@ static bool send_handler(int *err, struct sa *dst, struct mbuf *mb, void *arg)
 
 	if (!st->srtp_tx) {
 		lerr = EBUSY;
-		warning("srtp: srtp_tx not ready (%m)\n", err);
+		warning("srtp: srtp_tx not ready\n");
 		goto unlock_out;
 	}
 
@@ -321,12 +321,12 @@ static int start_crypto(struct menc_st *st, const struct pl *key_info)
 
 	len = get_master_keylen(resolve_suite(st->crypto_suite));
 
-	/* key-info is BASE64 encoded */
-	new_key = mem_zalloc(len, NULL);
+	/* key-info is BASE64 encoded requiring a larger buffer */
+	new_key = mem_zalloc(sizeof(st->key_rx), NULL);
 	if (!new_key)
 		return ENOMEM;
 
-	olen = len;
+	olen = sizeof(st->key_rx);
 	err = base64_decode(key_info->p, key_info->l, new_key, &olen);
 	if (err) {
 		mem_deref(new_key);
@@ -359,7 +359,7 @@ static int start_crypto(struct menc_st *st, const struct pl *key_info)
 
 	memcpy(st->key_rx, new_key, olen);
 	mem_secclean(new_key, olen);
-	new_key = mem_deref(new_key);
+	mem_deref(new_key);
 
 	err = start_srtp(st, st->crypto_suite);
 	if (err)

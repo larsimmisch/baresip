@@ -3,14 +3,13 @@
  *
  * Copyright (C) 2020 Alfred E. Heggestad
  */
-#define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
+#include <stdlib.h>
+#include <math.h>
+
 #include <re_atomic.h>
 #include <re.h>
 #include <rem.h>
 #include <baresip.h>
-#include <stdlib.h>
-#include <math.h>
 #define SCALE (32767.0f)
 #define AMPLITUDE 0.25f
 
@@ -166,7 +165,8 @@ static int play_thread(void *arg)
 				stereo_s16(sampv, (int16_t)(sample * SCALE),
 					   st->ch, &inc);
 			else if (st->prm.fmt == AUFMT_FLOAT)
-				stereo_float(sampv, sample, st->ch, &inc);
+				stereo_float(sampv, (float)sample,
+					     st->ch, &inc);
 		}
 
 		st->sec_offset = fmod(st->sec_offset + sec_per_frame * frames,
